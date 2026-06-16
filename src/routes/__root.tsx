@@ -88,6 +88,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:image", content: logoAsset.url },
       { name: "twitter:site", content: "@82-0" },
+      { name: "twitter:title", content: "82-0 — Build the Better Team" },
+      { name: "twitter:description", content: "Spin, draft, sim, and chase a perfect 82-0 season." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/7mEdsfnJ1pZKiTqZFLosjiGY3sv1/social-images/social-1781651595919-ChatGPT_Image_Jun_16,_2026,_04_48_12_PM.webp" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/7mEdsfnJ1pZKiTqZFLosjiGY3sv1/social-images/social-1781651595919-ChatGPT_Image_Jun_16,_2026,_04_48_12_PM.webp" },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
