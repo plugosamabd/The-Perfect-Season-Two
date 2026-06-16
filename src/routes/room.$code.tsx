@@ -338,7 +338,7 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
       return () => clearTimeout(t);
     }
     if (!room.spinResult) { lastTsRef.current = 0; setSpinning(false); }
-  }, [room.spinResult?.ts, room.spinResult]);
+  }, [room.spinResult?.ts]);
 
   const lastPicksRef = useRef<number>(totalPicks);
   useEffect(() => {
