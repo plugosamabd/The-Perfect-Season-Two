@@ -95,7 +95,8 @@ export function spin(playerId: string): SpinResult | null {
   if (!room || room.phase !== "draft" || room.spinResult) return room?.spinResult ?? null;
   if (!canDrive(room, playerId)) return null;
   const result = pickTeamSpin();
-  commit({ ...room, spinResult: result });
+  // Reset turnStartedAt so the pick timer starts fresh from this spin step.
+  commit({ ...room, spinResult: result, turnStartedAt: nowIso() });
   return result;
 }
 
@@ -107,7 +108,8 @@ export function spinEra(playerId: string): SpinResult | null {
   }
   if (!canDrive(room, playerId)) return null;
   const result = pickEraSpin(room.spinResult);
-  commit({ ...room, spinResult: result });
+  // Reset turnStartedAt so the pick timer starts fresh from this era-spin step.
+  commit({ ...room, spinResult: result, turnStartedAt: nowIso() });
   return result;
 }
 
@@ -208,21 +210,22 @@ export function respin(playerId: string, which: "team" | "era"): boolean {
   return true;
 }
 
-export function autoPlay(step: "spin" | "pick"): boolean {
+// force=true lets the host's timer watcher trigger this without waiting for the stale buffer.
+export function autoPlay(step: "spin" | "pick", force = false): boolean {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "draft") return false;
   const seat = room.currentTurn;
   const bot = isBotSeat(room, seat);
-  if (!bot && !turnIsStale(room)) return false;
+  if (!bot && !force && !turnIsStale(room)) return false;
 
   if (step === "spin") {
     // Handle both phases: team spin first, then era spin.
     if (!room.spinResult) {
-      commit({ ...room, spinResult: pickTeamSpin() });
+      commit({ ...room, spinResult: pickTeamSpin(), turnStartedAt: nowIso() });
       return true;
     }
     if (!room.spinResult.era) {
-      commit({ ...room, spinResult: pickEraSpin(room.spinResult) });
+      commit({ ...room, spinResult: pickEraSpin(room.spinResult), turnStartedAt: nowIso() });
       return true;
     }
     return false;
