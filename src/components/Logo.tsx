@@ -5,7 +5,7 @@ interface Props {
   alt?: string;
 }
 
-export function Logo({ className = "h-8 w-auto", alt = "82-0" }: Props) {
+export function Logo({ className = "h-14 w-auto sm:h-16 md:h-20", alt = "82-0" }: Props) {
   return <img src={logoAsset.url} alt={alt} className={className} draggable={false} />;
 }
 
