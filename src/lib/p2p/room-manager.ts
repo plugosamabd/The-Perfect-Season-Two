@@ -4,10 +4,50 @@ import { peerManager } from "./peer-manager";
 import { gameSync } from "./game-sync";
 import { ALL_SEATS, type Seat, genRoomCode } from "@/lib/game";
 
-function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: number): GameRoom {
+const SNAP_PREFIX = "lovable-room-snap-";
+
+export function saveRoomSnapshot(room: GameRoom) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    if (room.phase === "result") {
+      localStorage.removeItem(SNAP_PREFIX + room.code);
+    } else {
+      localStorage.setItem(SNAP_PREFIX + room.code, JSON.stringify({ room, ts: Date.now() }));
+    }
+  } catch { /* */ }
+}
+
+export function loadRoomSnapshot(code: string): GameRoom | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SNAP_PREFIX + code);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { room: GameRoom; ts: number };
+    return parsed.room ?? null;
+  } catch { return null; }
+}
+
+export function findResumableSnapshot(hostId: string): GameRoom | null {
+  if (typeof localStorage === "undefined") return null;
+  let best: { room: GameRoom; ts: number } | null = null;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(SNAP_PREFIX)) continue;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(k) ?? "");
+      if (!parsed?.room || parsed.room.hostId !== hostId) continue;
+      if (parsed.room.phase === "result" || parsed.room.phase === "lobby") continue;
+      if (!best || parsed.ts > best.ts) best = parsed;
+    } catch { /* */ }
+  }
+  return best?.room ?? null;
+}
+
+function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: number, respinsTotal = 0): GameRoom {
   const teams: Record<number, never[]> = {};
   const records: Record<number, null> = {};
-  for (const s of ALL_SEATS) { teams[s] = []; records[s] = null; }
+  const respinsUsed: Record<number, number> = {};
+  for (const s of ALL_SEATS) { teams[s] = []; records[s] = null; respinsUsed[s] = 0; }
   return {
     code,
     hostId,
@@ -23,16 +63,20 @@ function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: n
     winner: null,
     turnStartedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    respinsTotal,
+    respinsUsed,
+    respinUsedThisTurn: false,
   };
 }
 
 export const roomManager = {
-  async hostNewRoom(hostId: string, hostName: string, maxPlayers: number): Promise<GameRoom> {
+  async hostNewRoom(hostId: string, hostName: string, maxPlayers: number, respinsTotal = 0): Promise<GameRoom> {
     const code = genRoomCode();
     await peerManager.initHost(code);
     gameSync.init();
-    const room = emptyRoom(code, hostId, hostName, maxPlayers);
+    const room = emptyRoom(code, hostId, hostName, maxPlayers, respinsTotal);
     useP2PStore.setState({ room, messages: [] });
+    saveRoomSnapshot(room);
     return room;
   },
 
@@ -40,14 +84,10 @@ export const roomManager = {
     await peerManager.initJoiner();
     gameSync.init();
     await peerManager.connectToHost(code);
-    // ask host for current state, then announce ourselves
     gameSync.requestSync();
-    // wait briefly for sync
     await new Promise((r) => setTimeout(r, 400));
-    // host adds joiner via sync; but joiner can also propose itself:
     const room = useP2PStore.getState().room;
     if (room && !room.players.some((p) => p.id === playerId)) {
-      // joiner finds open seat client-side and asks host to broadcast
       const used = new Set(room.players.map((p) => p.seat));
       let seat: Seat | null = null;
       for (const s of ALL_SEATS) {
@@ -59,18 +99,16 @@ export const roomManager = {
         players: [...room.players, { id: playerId, name: playerName, seat }],
         updatedAt: new Date().toISOString(),
       };
-      // Host will rebroadcast on receive — but simpler: send sync back, host will accept via relay.
       gameSync.syncRoom(updated);
     }
   },
 
-  async hostSoloRoom(hostId: string, hostName: string, bots: number): Promise<GameRoom> {
+  async hostSoloRoom(hostId: string, hostName: string, bots: number, respinsTotal = 0): Promise<GameRoom> {
     const code = genRoomCode();
-    // No peer connection needed for solo — but init host so chat/sync code paths are consistent
     await peerManager.initHost(code).catch(() => { /* peer optional for solo */ });
     gameSync.init();
     const maxPlayers = bots + 1;
-    const room = emptyRoom(code, hostId, hostName, maxPlayers);
+    const room = emptyRoom(code, hostId, hostName, maxPlayers, respinsTotal);
     room.phase = "draft";
     const botNames = ["CPU Alpha", "CPU Bravo", "CPU Charlie"];
     for (let i = 0; i < bots; i++) {
@@ -82,7 +120,17 @@ export const roomManager = {
       });
     }
     useP2PStore.setState({ room, messages: [] });
+    saveRoomSnapshot(room);
     return room;
+  },
+
+  async resumeRoom(code: string): Promise<GameRoom | null> {
+    const snap = loadRoomSnapshot(code);
+    if (!snap) return null;
+    await peerManager.initHost(code).catch(() => { /* */ });
+    gameSync.init();
+    useP2PStore.setState({ room: snap, messages: [] });
+    return snap;
   },
 
   resetRoom() {
@@ -90,7 +138,8 @@ export const roomManager = {
     if (!room) return;
     const teams: Record<number, never[]> = {};
     const records: Record<number, null> = {};
-    for (const s of ALL_SEATS) { teams[s] = []; records[s] = null; }
+    const respinsUsed: Record<number, number> = {};
+    for (const s of ALL_SEATS) { teams[s] = []; records[s] = null; respinsUsed[s] = 0; }
     const updated: GameRoom = {
       ...room,
       phase: "draft",
@@ -103,6 +152,8 @@ export const roomManager = {
       winner: null,
       turnStartedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      respinsUsed,
+      respinUsedThisTurn: false,
     };
     gameSync.syncRoom(updated);
   },
@@ -142,6 +193,10 @@ export const roomManager = {
   },
 
   async leaveRoom() {
+    const room = useP2PStore.getState().room;
+    if (room && typeof localStorage !== "undefined") {
+      try { localStorage.removeItem(SNAP_PREFIX + room.code); } catch { /* */ }
+    }
     await peerManager.destroy();
     useP2PStore.setState({ room: null, messages: [], connected: false });
   },

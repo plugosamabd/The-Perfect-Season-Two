@@ -1,10 +1,13 @@
 import { peerManager } from "./peer-manager";
 import { useP2PStore, type GameRoom, type ChatMessage } from "./store";
+import { saveRoomSnapshot } from "./room-manager";
 
 class GameSync {
   init() {
     peerManager.on("sync-room", (data) => {
-      useP2PStore.setState({ room: data as GameRoom });
+      const room = data as GameRoom;
+      useP2PStore.setState({ room });
+      if (peerManager.isHost) saveRoomSnapshot(room);
     });
     peerManager.on("request-sync", (_data, senderId) => {
       const room = useP2PStore.getState().room;
@@ -19,6 +22,7 @@ class GameSync {
 
   syncRoom(room: GameRoom) {
     useP2PStore.setState({ room });
+    if (peerManager.isHost) saveRoomSnapshot(room);
     peerManager.broadcast("sync-room", room);
   }
 

@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { roomManager } from "@/lib/p2p";
+import { findResumableSnapshot } from "@/lib/p2p/room-manager";
 import { getPlayerId, getPlayerName, setPlayerName } from "@/lib/identity";
 import { Logo } from "@/components/Logo";
 
@@ -25,10 +26,16 @@ function Landing() {
   const [mode, setMode] = useState<Mode>("solo");
   const [bots, setBots] = useState(1);
   const [maxPlayers, setMaxPlayers] = useState(2);
+  const [respins, setRespins] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [resumeCode, setResumeCode] = useState<string | null>(null);
 
-  useEffect(() => { setName(getPlayerName()); }, []);
+  useEffect(() => {
+    setName(getPlayerName());
+    const snap = findResumableSnapshot(getPlayerId());
+    if (snap) setResumeCode(snap.code);
+  }, []);
 
   async function go(e: React.FormEvent) {
     e.preventDefault();
@@ -39,10 +46,10 @@ function Landing() {
     try {
       const pid = getPlayerId();
       if (mode === "solo") {
-        const r = await roomManager.hostSoloRoom(pid, name.trim(), bots);
+        const r = await roomManager.hostSoloRoom(pid, name.trim(), bots, respins);
         navigate({ to: "/room/$code", params: { code: r.code } });
       } else if (mode === "create") {
-        const r = await roomManager.hostNewRoom(pid, name.trim(), maxPlayers);
+        const r = await roomManager.hostNewRoom(pid, name.trim(), maxPlayers, respins);
         navigate({ to: "/room/$code", params: { code: r.code } });
       } else {
         const c = code.trim().toUpperCase();
@@ -56,11 +63,24 @@ function Landing() {
     }
   }
 
+  async function resume() {
+    if (!resumeCode) return;
+    setBusy(true);
+    try {
+      await roomManager.resumeRoom(resumeCode);
+      navigate({ to: "/room/$code", params: { code: resumeCode } });
+    } catch {
+      setBusy(false);
+    }
+  }
+
   const modes: { id: Mode; label: string; sub: string }[] = [
     { id: "solo", label: "Solo", sub: "vs CPU" },
     { id: "create", label: "Host", sub: "with friends" },
     { id: "join", label: "Join", sub: "with a code" },
   ];
+
+  const showRespinSelector = mode === "solo" || mode === "create";
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 sm:p-6">
@@ -78,6 +98,23 @@ function Landing() {
             Spin for an era and team. Draft five. Sim a season. First to a perfect record wins.
           </p>
         </div>
+
+        {resumeCode && (
+          <div className="mb-4 bg-card border border-foreground/30 rounded-xl p-4 flex items-center justify-between gap-3">
+            <div className="text-left">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Game paused</div>
+              <div className="text-sm font-medium mt-0.5">Resume room <span className="font-mono tracking-[0.2em]">{resumeCode}</span></div>
+            </div>
+            <button
+              type="button"
+              onClick={resume}
+              disabled={busy}
+              className="px-3 py-2 rounded-md bg-foreground text-background text-xs font-medium uppercase tracking-wide hover:opacity-90 disabled:opacity-40"
+            >
+              Resume
+            </button>
+          </div>
+        )}
 
         <div className="bg-card border border-border rounded-2xl p-5 sm:p-6">
           <div className="grid grid-cols-3 gap-1 mb-6 p-1 bg-background rounded-lg border border-border">
@@ -152,6 +189,27 @@ function Landing() {
                 </Field>
                 <p className="text-xs text-muted-foreground">Share the code or link to invite friends. Empty seats can be filled with CPUs.</p>
               </>
+            )}
+
+            {showRespinSelector && (
+              <Field label="Respins per player">
+                <div className="grid grid-cols-4 gap-2">
+                  {[0, 1, 2, 3].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setRespins(n)}
+                      className={`py-2.5 rounded-md border text-sm transition ${
+                        respins === n
+                          ? "border-foreground/60 bg-foreground/5 text-foreground"
+                          : "border-border text-muted-foreground hover:border-foreground/30"
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </Field>
             )}
 
             {mode === "join" && (

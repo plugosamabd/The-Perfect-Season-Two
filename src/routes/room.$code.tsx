@@ -4,7 +4,8 @@ import { getPlayerId, getPlayerName } from "@/lib/identity";
 import { erasForTeam, getPlayersFor, teamColor, TEAMS_WITH_ROSTER, type Era, type Player, type Position } from "@/data/roster";
 import { POSITIONS, TURN_SECONDS, type DraftedPlayer, type Seat } from "@/lib/game";
 import { useP2PStore, roomManager, type GameRoom } from "@/lib/p2p";
-import { spin, spinEra, pickPlayer, runSim, pickAvatar, submitMove, autoPlay } from "@/lib/game.actions";
+import { loadRoomSnapshot } from "@/lib/p2p/room-manager";
+import { spin, spinEra, pickPlayer, runSim, pickAvatar, submitMove, autoPlay, respin } from "@/lib/game.actions";
 import { ChatBox } from "@/components/ChatBox";
 import { SpinWheel, teamSlices, eraSlices } from "@/components/SpinWheel";
 import { PlayerPicker } from "@/components/PlayerPicker";
@@ -65,8 +66,23 @@ function RoomPage() {
   const connected = useP2PStore((s) => s.connected);
   const [pid, setPid] = useState("");
   const [myName, setMyName] = useState("");
+  const [resumeTried, setResumeTried] = useState(false);
 
   useEffect(() => { setPid(getPlayerId()); setMyName(getPlayerName()); }, []);
+
+  // Host-only resume: if landing here cold (refresh/relaunch), try to hydrate
+  // from the local snapshot when we were the host.
+  useEffect(() => {
+    if (resumeTried || !pid) return;
+    if (room && room.code === code) return;
+    const snap = loadRoomSnapshot(code);
+    if (snap && snap.hostId === pid) {
+      setResumeTried(true);
+      roomManager.resumeRoom(code).catch(() => { /* */ });
+    } else {
+      setResumeTried(true);
+    }
+  }, [pid, code, room, resumeTried]);
 
   const realSeat = useMemo<SeatN | 0>(() => {
     if (!room) return 0;
@@ -94,17 +110,31 @@ function RoomPage() {
     );
   }
 
+  const myRespinsLeft = realSeat > 0
+    ? Math.max(0, (room.respinsTotal ?? 0) - (room.respinsUsed?.[realSeat] ?? 0))
+    : 0;
+  const canRespinNow =
+    realSeat > 0 &&
+    room.phase === "draft" &&
+    room.currentTurn === realSeat &&
+    !!room.spinResult?.era &&
+    !room.respinUsedThisTurn &&
+    myRespinsLeft > 0;
+
   return (
     <div className="min-h-screen p-3 sm:p-6">
       <header className="max-w-6xl mx-auto mb-6 flex items-center justify-between gap-3">
         <Link to="/" aria-label="82-0 home" className="inline-flex items-center">
           <Logo className="h-9 w-auto" />
         </Link>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
           <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className={`w-1.5 h-1.5 rounded-full ${connected || room.players.length <= 1 ? "bg-emerald-400" : "bg-amber-400 animate-pulse"}`} />
             {connected ? "Peers connected" : room.players.length > 1 ? "Connecting…" : "Solo"}
           </div>
+          {(room.respinsTotal ?? 0) > 0 && realSeat > 0 && (
+            <RespinControl canRespin={canRespinNow} respinsLeft={myRespinsLeft} />
+          )}
           <MuteToggle />
           <div className="text-right">
             <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Room</div>
@@ -144,6 +174,49 @@ function MuteToggle() {
     </button>
   );
 }
+
+function RespinControl({ canRespin, respinsLeft }: { canRespin: boolean; respinsLeft: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={!canRespin}
+        onClick={() => setOpen((v) => !v)}
+        title={canRespin ? "Use a respin" : respinsLeft === 0 ? "No respins left" : "Respin only on your turn after a spin"}
+        className="px-2.5 h-7 inline-flex items-center gap-1.5 rounded-md border border-border text-[11px] uppercase tracking-[0.16em] text-foreground/80 hover:text-foreground hover:border-foreground/30 transition disabled:opacity-40 disabled:hover:text-foreground/80 disabled:hover:border-border"
+      >
+        <span>↻ Respin</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{respinsLeft}</span>
+      </button>
+      {open && canRespin && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-44 bg-card border border-border rounded-lg shadow-lg z-40 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => { setOpen(false); respin(getPlayerId(), "team"); }}
+              className="w-full text-left px-3 py-2 text-xs hover:bg-foreground/5 transition"
+            >
+              <div className="font-medium">Respin team</div>
+              <div className="text-[10px] text-muted-foreground">Keep era · new team</div>
+            </button>
+            <div className="h-px bg-border" />
+            <button
+              type="button"
+              onClick={() => { setOpen(false); respin(getPlayerId(), "era"); }}
+              className="w-full text-left px-3 py-2 text-xs hover:bg-foreground/5 transition"
+            >
+              <div className="font-medium">Respin era</div>
+              <div className="text-[10px] text-muted-foreground">Keep team · new era</div>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 
 /* ---------------- LOBBY ---------------- */

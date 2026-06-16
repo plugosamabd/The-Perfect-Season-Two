@@ -101,25 +101,76 @@ export const sfx = {
     note(1320, { dur: 0.08, gain: 0.05, attack: 0.003, release: 0.07 });
   },
 
-  /** Slow, gentle descending shimmer while the wheel spins. */
+  /** Casino-style decelerating ticks — like a roulette/prize wheel slowing down.
+   *  Each call generates a fresh tick cadence so consecutive spins don't sound identical. */
   spin() {
     const a = ac();
-    if (!a) return;
-    const base = [880, 740, 620, 520];
-    let i = 0;
-    const id = setInterval(() => {
-      const f = base[i % base.length] - i * 4;
-      note(f, { dur: 0.18, gain: 0.05, attack: 0.01, release: 0.15 });
-      i++;
-      if (i > 14) clearInterval(id);
-    }, 160);
+    const out = dest();
+    if (!a || !out) return;
+    // Total spin length ~3.4s, ticks accelerate-then-decelerate (ease-out).
+    const total = 3.4;
+    const tickCount = 28 + Math.floor(Math.random() * 6); // 28-33 ticks
+    const start = a.currentTime;
+    for (let i = 0; i < tickCount; i++) {
+      // ease-out cubic — ticks bunch at start, slow toward end
+      const t = i / tickCount;
+      const eased = 1 - Math.pow(1 - t, 2.4);
+      const when = start + eased * total;
+      // tick = short noise burst through bandpass → wooden "tack"
+      const dur = 0.045;
+      const buf = a.createBuffer(1, Math.floor(a.sampleRate * dur), a.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let j = 0; j < d.length; j++) {
+        const k = j / d.length;
+        d[j] = (Math.random() * 2 - 1) * Math.pow(1 - k, 3);
+      }
+      const src = a.createBufferSource();
+      src.buffer = buf;
+      const bp = a.createBiquadFilter();
+      bp.type = "bandpass";
+      // pitch drops gently as wheel slows
+      bp.frequency.value = 2400 - eased * 900 + (Math.random() - 0.5) * 200;
+      bp.Q.value = 6;
+      const g = a.createGain();
+      // slight volume swell then fall
+      const vol = 0.25 * (0.5 + Math.sin(t * Math.PI) * 0.6);
+      g.gain.setValueAtTime(vol, when);
+      g.gain.exponentialRampToValueAtTime(0.001, when + dur);
+      src.connect(bp).connect(g).connect(out);
+      src.start(when);
+      src.stop(when + dur + 0.02);
+    }
   },
 
-  /** Warm major-triad arrival when the wheel lands. */
+  /** Casino "win" chime — varies between a few presets so it never feels repetitive. */
   land() {
-    pad(523.25, { dur: 0.6, gain: 0.16, attack: 0.04, release: 0.4 }); // C5
-    pad(659.25, { dur: 0.6, gain: 0.14, attack: 0.05, release: 0.4, delay: 0.05 }); // E5
-    pad(783.99, { dur: 0.7, gain: 0.13, attack: 0.06, release: 0.5, delay: 0.1 }); // G5
+    const variants: Array<() => void> = [
+      // Bright triad ding
+      () => {
+        pad(659.25, { dur: 0.55, gain: 0.16, attack: 0.01, release: 0.45 });
+        pad(987.77, { dur: 0.7,  gain: 0.13, attack: 0.02, release: 0.55, delay: 0.06 });
+        pad(1318.5, { dur: 0.85, gain: 0.11, attack: 0.03, release: 0.7,  delay: 0.14 });
+      },
+      // Quick ascending arpeggio
+      () => {
+        note(523.25, { dur: 0.22, type: "triangle", gain: 0.14, attack: 0.005, release: 0.18 });
+        note(659.25, { dur: 0.22, type: "triangle", gain: 0.14, attack: 0.005, release: 0.18, delay: 0.08 });
+        note(880.00, { dur: 0.55, type: "triangle", gain: 0.14, attack: 0.01,  release: 0.45, delay: 0.16 });
+      },
+      // Warm dyad bloom
+      () => {
+        pad(440,    { dur: 0.7, gain: 0.16, attack: 0.04, release: 0.55 });
+        pad(659.25, { dur: 0.8, gain: 0.13, attack: 0.05, release: 0.6, delay: 0.07 });
+      },
+      // Sparkly two-bell
+      () => {
+        note(1567.98, { dur: 0.35, type: "sine", gain: 0.10, attack: 0.002, release: 0.32 });
+        note(1244.5,  { dur: 0.55, type: "sine", gain: 0.12, attack: 0.005, release: 0.5, delay: 0.09 });
+        pad(622.25,   { dur: 0.6,  gain: 0.10, attack: 0.04, release: 0.5, delay: 0.05 });
+      },
+    ];
+    const pick = variants[Math.floor(Math.random() * variants.length)];
+    pick();
   },
 
   /** Soft "swish" — filtered noise, short and airy. */

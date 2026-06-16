@@ -33,6 +33,9 @@ export interface GameRoom {
   winner: Seat | null;
   turnStartedAt: string;
   updatedAt: string;
+  respinsTotal: number;
+  respinsUsed: Record<number, number>;
+  respinUsedThisTurn: boolean;
 }
 
 export interface ChatMessage {

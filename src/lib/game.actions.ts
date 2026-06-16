@@ -142,6 +142,67 @@ export function pickPlayer(playerId: string, playerName: string, position: Posit
     currentTurn: nextSeat(room, seat),
     turnStartedAt: nowIso(),
     phase: total >= target ? "sim" : "draft",
+    respinUsedThisTurn: false,
+  });
+  return true;
+}
+
+// Respin within a turn: choose to re-spin TEAM (keep era) or ERA (keep team).
+// One respin per turn, drawn from the seat's respinsTotal budget.
+export function respin(playerId: string, which: "team" | "era"): boolean {
+  const room = useP2PStore.getState().room;
+  if (!room || room.phase !== "draft" || !room.spinResult || !room.spinResult.era) return false;
+  if (!canDrive(room, playerId)) return false;
+  const seat = room.currentTurn;
+  if (room.respinUsedThisTurn) return false;
+  const used = room.respinsUsed[seat] ?? 0;
+  if (used >= (room.respinsTotal ?? 0)) return false;
+
+  const sr = room.spinResult;
+  let next: SpinResult;
+  if (which === "era") {
+    const eras = erasForTeam(sr.team).filter((e) => e !== sr.era);
+    const pool = eras.length > 0 ? eras : erasForTeam(sr.team);
+    if (pool.length === 0) return false;
+    const idx = Math.floor(Math.random() * pool.length);
+    const era = pool[idx];
+    const eraAll = erasForTeam(sr.team);
+    const eraIndex = eraAll.indexOf(era);
+    next = {
+      ...sr,
+      ts: Date.now(),
+      era,
+      eraIndex,
+      eraRotation: rotationFor(eraAll.length, eraIndex, 4, 3),
+    };
+  } else {
+    // Respin team — keep era. Pick a team that has the current era; fallback to any.
+    const currentEra = sr.era as Era;
+    const teams = TEAMS_WITH_ROSTER.filter((t) => t !== sr.team && erasForTeam(t).includes(currentEra));
+    const pool = teams.length > 0 ? teams : TEAMS_WITH_ROSTER.filter((t) => t !== sr.team);
+    if (pool.length === 0) return false;
+    const team = pool[Math.floor(Math.random() * pool.length)];
+    const teamIndex = TEAMS_WITH_ROSTER.indexOf(team);
+    const eraList = erasForTeam(team);
+    const eraIndex = eraList.indexOf(currentEra);
+    const finalEra = eraIndex >= 0 ? currentEra : eraList[0];
+    const finalIdx = eraIndex >= 0 ? eraIndex : 0;
+    next = {
+      ts: Date.now(),
+      team,
+      teamIndex,
+      teamRotation: rotationFor(TEAMS_WITH_ROSTER.length, teamIndex, 4, 3),
+      era: finalEra,
+      eraIndex: finalIdx,
+      eraRotation: rotationFor(eraList.length, finalIdx, 4, 3),
+    };
+  }
+  commit({
+    ...room,
+    spinResult: next,
+    respinsUsed: { ...room.respinsUsed, [seat]: used + 1 },
+    respinUsedThisTurn: true,
+    turnStartedAt: nowIso(),
   });
   return true;
 }
@@ -195,6 +256,7 @@ export function autoPlay(step: "spin" | "pick"): boolean {
     currentTurn: nextSeat(room, seat),
     turnStartedAt: nowIso(),
     phase: total >= target ? "sim" : "draft",
+    respinUsedThisTurn: false,
   });
   return true;
 }
