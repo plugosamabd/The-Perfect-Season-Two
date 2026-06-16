@@ -358,19 +358,20 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   const lastActedKey = useRef<string>("");
   const iAmHost = me === 1;
 
-  // Bot autoPlay — no `remaining` dep so the timer isn't canceled every second.
+  // Bot autoPlay — no `spinning` dep (spin animations play in background);
+  // lastActedKey prevents double-firing; fires in ~1-4 seconds total per pick.
   useEffect(() => {
-    if (spinning || room.phase !== "draft" || !iAmHost || !turnIsBot) return;
+    if (room.phase !== "draft" || !iAmHost || !turnIsBot) return;
     const key = `${room.currentTurn}-${totalPicks}-${room.spinResult?.ts ?? 0}`;
     if (lastActedKey.current === key) return;
     const step: "spin" | "pick" = (!room.spinResult || room.spinResult.era == null) ? "spin" : "pick";
-    const delay = step === "spin" ? 800 + Math.random() * 600 : 2500 + Math.random() * 5000;
+    const delay = step === "spin" ? 300 + Math.random() * 400 : 1000 + Math.random() * 1500;
     const t = setTimeout(() => {
       lastActedKey.current = key;
       autoPlay(step);
     }, delay);
     return () => clearTimeout(t);
-  }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, iAmHost]);
+  }, [turnIsBot, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, iAmHost]);
 
   // Human timeout — re-checks on every `remaining` tick so 0-second turns fire immediately.
   useEffect(() => {
