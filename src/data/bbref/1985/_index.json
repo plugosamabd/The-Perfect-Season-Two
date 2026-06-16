@@ -1,0 +1,165 @@
+{
+  "teams": [
+    {
+      "name": "Boston Celtics",
+      "abbrev": "BOS",
+      "wins": 63,
+      "losses": 19,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Philadelphia 76ers",
+      "abbrev": "PHI",
+      "wins": 58,
+      "losses": 24,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "New Jersey Nets",
+      "abbrev": "NJN",
+      "wins": 42,
+      "losses": 40,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Washington Bullets",
+      "abbrev": "WSB",
+      "wins": 40,
+      "losses": 42,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "New York Knicks",
+      "abbrev": "NYK",
+      "wins": 24,
+      "losses": 58,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Milwaukee Bucks",
+      "abbrev": "MIL",
+      "wins": 59,
+      "losses": 23,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Detroit Pistons",
+      "abbrev": "DET",
+      "wins": 46,
+      "losses": 36,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Chicago Bulls",
+      "abbrev": "CHI",
+      "wins": 38,
+      "losses": 44,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Cleveland Cavaliers",
+      "abbrev": "CLE",
+      "wins": 36,
+      "losses": 46,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Atlanta Hawks",
+      "abbrev": "ATL",
+      "wins": 34,
+      "losses": 48,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Indiana Pacers",
+      "abbrev": "IND",
+      "wins": 22,
+      "losses": 60,
+      "conference": "Eastern Conference"
+    },
+    {
+      "name": "Denver Nuggets",
+      "abbrev": "DEN",
+      "wins": 52,
+      "losses": 30,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Houston Rockets",
+      "abbrev": "HOU",
+      "wins": 48,
+      "losses": 34,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Dallas Mavericks",
+      "abbrev": "DAL",
+      "wins": 44,
+      "losses": 38,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Utah Jazz",
+      "abbrev": "UTA",
+      "wins": 41,
+      "losses": 41,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "San Antonio Spurs",
+      "abbrev": "SAS",
+      "wins": 41,
+      "losses": 41,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Kansas City Kings",
+      "abbrev": "KCK",
+      "wins": 31,
+      "losses": 51,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Los Angeles Lakers",
+      "abbrev": "LAL",
+      "wins": 62,
+      "losses": 20,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Portland Trail Blazers",
+      "abbrev": "POR",
+      "wins": 42,
+      "losses": 40,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Phoenix Suns",
+      "abbrev": "PHO",
+      "wins": 36,
+      "losses": 46,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Seattle SuperSonics",
+      "abbrev": "SEA",
+      "wins": 31,
+      "losses": 51,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Los Angeles Clippers",
+      "abbrev": "LAC",
+      "wins": 31,
+      "losses": 51,
+      "conference": "Western Conference"
+    },
+    {
+      "name": "Golden State Warriors",
+      "abbrev": "GSW",
+      "wins": 22,
+      "losses": 60,
+      "conference": "Western Conference"
+    }
+  ]
+}
