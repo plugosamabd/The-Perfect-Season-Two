@@ -256,6 +256,7 @@ export function autoPlay(step: "spin" | "pick"): boolean {
     currentTurn: nextSeat(room, seat),
     turnStartedAt: nowIso(),
     phase: total >= target ? "sim" : "draft",
+    respinUsedThisTurn: false,
   });
   return true;
 }
