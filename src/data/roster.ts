@@ -113,11 +113,18 @@ const BIG_MAN_PLAYERS = new Set([
 ]);
 
 
+import NBA_POSITIONS from "./nba/positions.json";
+import NBA_ROSTERS from "./nba/rosters.json";
+
+const NBA_POS = NBA_POSITIONS as Record<string, Position[]>;
+const NBA_ROST = NBA_ROSTERS as Record<string, Record<string, string[]>>;
+
 export function getPositions(name: string): Position[] {
   const normalized = name.trim();
-  const base = POSITION_OVERRIDES[normalized]
-    ?? (BIG_MAN_PLAYERS.has(normalized) ? ["PF", "C"] as Position[] : ["PG", "SG", "SF"] as Position[]);
-  // Position flex: any C-eligible player can slot at PF, any PF-eligible can slot at C.
+  const base =
+    POSITION_OVERRIDES[normalized] ??
+    NBA_POS[normalized] ??
+    (BIG_MAN_PLAYERS.has(normalized) ? (["PF", "C"] as Position[]) : (["PG", "SG", "SF"] as Position[]));
   const set = new Set<Position>(base);
   if (set.has("C")) set.add("PF");
   if (set.has("PF")) set.add("C");
@@ -476,11 +483,19 @@ function mergeRoster(): Player[] {
     const base = raw[era] ?? {};
     const extra = EXTRA[era] ?? {};
     const more = EXTRA_TEAMS[era] ?? {};
-    const teamSet = new Set<string>([...Object.keys(base), ...Object.keys(extra), ...Object.keys(more)]);
+    const nba = NBA_ROST[era] ?? {};
+    const teamSet = new Set<string>([
+      ...Object.keys(base),
+      ...Object.keys(extra),
+      ...Object.keys(more),
+      ...Object.keys(nba),
+    ]);
     for (const team of teamSet) {
       for (const [name, rating, wow] of (base[team] ?? [])) push(era, team, name as string, rating as number, wow);
       for (const [name, rating, wow] of (extra[team] ?? [])) push(era, team, name as string, rating as number, wow);
       for (const [name, rating, wow] of (more[team] ?? [])) push(era, team, name as string, rating as number, wow);
+      // DB-verified NBA players who played for this franchise in this era (last-team attribution).
+      for (const name of (nba[team] ?? [])) push(era, team, name, 72);
     }
   }
   return out;
