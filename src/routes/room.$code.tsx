@@ -385,7 +385,7 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     const delay = Math.max(0, remainMs) + 250;
     const t = setTimeout(() => {
       lastActedKey.current = key;
-      autoPlay(step);
+      autoPlay(step, true);
     }, delay);
     return () => clearTimeout(t);
   }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, iAmHost, remaining]);
