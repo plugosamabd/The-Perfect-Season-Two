@@ -18,10 +18,19 @@ export interface TiebreakerState {
   history: Array<{ round: number; offense: Seat; moves: Record<string, string>; roundWinner: Seat }>;
 }
 
+export type GameMode = "classic" | "tvt";
+
+export interface TvtMatchup {
+  seatA: Seat;
+  seatB: Seat;
+  winner: Seat;
+}
+
 export interface GameRoom {
   code: string;
   hostId: string;
   phase: "lobby" | "draft" | "sim" | "tiebreaker_pick" | "tiebreaker" | "result";
+  gameMode: GameMode;
   maxPlayers: number;
   players: RoomPlayer[];
   currentTurn: Seat;
@@ -30,6 +39,7 @@ export interface GameRoom {
   records: Record<number, { wins: number; losses: number } | null>;
   tiebreaker: TiebreakerState | null;
   tiebreakerPlayers: Seat[] | null;
+  tvtMatchups: TvtMatchup[] | null;
   winner: Seat | null;
   turnStartedAt: string;
   updatedAt: string;

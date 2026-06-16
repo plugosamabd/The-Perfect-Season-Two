@@ -1,4 +1,4 @@
-import type { GameRoom } from "./store";
+import type { GameRoom, GameMode } from "./store";
 import { useP2PStore } from "./store";
 import { peerManager } from "./peer-manager";
 import { gameSync } from "./game-sync";
@@ -43,7 +43,7 @@ export function findResumableSnapshot(hostId: string): GameRoom | null {
   return best?.room ?? null;
 }
 
-function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: number, respinsTotal = 0): GameRoom {
+function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: number, respinsTotal = 0, gameMode: GameMode = "classic"): GameRoom {
   const teams: Record<number, never[]> = {};
   const records: Record<number, null> = {};
   const respinsUsed: Record<number, number> = {};
@@ -52,6 +52,7 @@ function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: n
     code,
     hostId,
     phase: "lobby",
+    gameMode,
     maxPlayers,
     players: [{ id: hostId, name: hostName, seat: 1 }],
     currentTurn: 1,
@@ -60,6 +61,7 @@ function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: n
     records,
     tiebreaker: null,
     tiebreakerPlayers: null,
+    tvtMatchups: null,
     winner: null,
     turnStartedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -70,11 +72,11 @@ function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: n
 }
 
 export const roomManager = {
-  async hostNewRoom(hostId: string, hostName: string, maxPlayers: number, respinsTotal = 0): Promise<GameRoom> {
+  async hostNewRoom(hostId: string, hostName: string, maxPlayers: number, respinsTotal = 0, gameMode: GameMode = "classic"): Promise<GameRoom> {
     const code = genRoomCode();
     await peerManager.initHost(code);
     gameSync.init();
-    const room = emptyRoom(code, hostId, hostName, maxPlayers, respinsTotal);
+    const room = emptyRoom(code, hostId, hostName, maxPlayers, respinsTotal, gameMode);
     useP2PStore.setState({ room, messages: [] });
     saveRoomSnapshot(room);
     return room;
@@ -103,12 +105,12 @@ export const roomManager = {
     }
   },
 
-  async hostSoloRoom(hostId: string, hostName: string, bots: number, respinsTotal = 0): Promise<GameRoom> {
+  async hostSoloRoom(hostId: string, hostName: string, bots: number, respinsTotal = 0, gameMode: GameMode = "classic"): Promise<GameRoom> {
     const code = genRoomCode();
     await peerManager.initHost(code).catch(() => { /* peer optional for solo */ });
     gameSync.init();
     const maxPlayers = bots + 1;
-    const room = emptyRoom(code, hostId, hostName, maxPlayers, respinsTotal);
+    const room = emptyRoom(code, hostId, hostName, maxPlayers, respinsTotal, gameMode);
     room.phase = "draft";
     const botNames = ["CPU Alpha", "CPU Bravo", "CPU Charlie"];
     for (let i = 0; i < bots; i++) {
@@ -129,8 +131,15 @@ export const roomManager = {
     if (!snap) return null;
     await peerManager.initHost(code).catch(() => { /* */ });
     gameSync.init();
-    useP2PStore.setState({ room: snap, messages: [] });
-    return snap;
+    // Reset turnStartedAt to now so the turn timer starts fresh on resume,
+    // preventing an instant timeout/autoplay on the current turn.
+    const resumed: GameRoom = {
+      ...snap,
+      turnStartedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    useP2PStore.setState({ room: resumed, messages: [] });
+    return resumed;
   },
 
   resetRoom() {

@@ -140,6 +140,14 @@ class PeerManager {
 
   hasConnections(): boolean { return this.connections.size > 0; }
 
+  // Reconnect a joiner to the host — reinitialises the peer if it's been destroyed.
+  async reconnectToHost(roomCode: string): Promise<void> {
+    if (!this.peer || (this.peer as unknown as { destroyed?: boolean }).destroyed) {
+      await this.initJoiner();
+    }
+    return this.connectToHost(roomCode);
+  }
+
   async destroy() {
     for (const c of this.connections.values()) {
       try { c.close(); } catch { /* ignore */ }

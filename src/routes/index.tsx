@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { roomManager } from "@/lib/p2p";
+import { type GameMode } from "@/lib/p2p";
 import { findResumableSnapshot } from "@/lib/p2p/room-manager";
 import { getPlayerId, getPlayerName, setPlayerName } from "@/lib/identity";
 import { Logo } from "@/components/Logo";
@@ -27,6 +28,7 @@ function Landing() {
   const [bots, setBots] = useState(1);
   const [maxPlayers, setMaxPlayers] = useState(2);
   const [respins, setRespins] = useState(0);
+  const [gameMode, setGameMode] = useState<GameMode>("classic");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [resumeCode, setResumeCode] = useState<string | null>(null);
@@ -46,10 +48,10 @@ function Landing() {
     try {
       const pid = getPlayerId();
       if (mode === "solo") {
-        const r = await roomManager.hostSoloRoom(pid, name.trim(), bots, respins);
+        const r = await roomManager.hostSoloRoom(pid, name.trim(), bots, respins, gameMode);
         navigate({ to: "/room/$code", params: { code: r.code } });
       } else if (mode === "create") {
-        const r = await roomManager.hostNewRoom(pid, name.trim(), maxPlayers, respins);
+        const r = await roomManager.hostNewRoom(pid, name.trim(), maxPlayers, respins, gameMode);
         navigate({ to: "/room/$code", params: { code: r.code } });
       } else {
         const c = code.trim().toUpperCase();
@@ -80,7 +82,7 @@ function Landing() {
     { id: "join", label: "Join", sub: "with a code" },
   ];
 
-  const showRespinSelector = mode === "solo" || mode === "create";
+  const showOptions = mode === "solo" || mode === "create";
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 sm:p-6">
@@ -191,7 +193,38 @@ function Landing() {
               </>
             )}
 
-            {showRespinSelector && (
+            {showOptions && (
+              <Field label="Sim mode">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setGameMode("classic")}
+                    className={`py-2.5 px-3 rounded-md border text-sm text-left transition ${
+                      gameMode === "classic"
+                        ? "border-foreground/60 bg-foreground/5 text-foreground"
+                        : "border-border text-muted-foreground hover:border-foreground/30"
+                    }`}
+                  >
+                    <div className="font-medium">82-0</div>
+                    <div className="text-[10px] mt-0.5 opacity-70">Classic record sim</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGameMode("tvt")}
+                    className={`py-2.5 px-3 rounded-md border text-sm text-left transition ${
+                      gameMode === "tvt"
+                        ? "border-foreground/60 bg-foreground/5 text-foreground"
+                        : "border-border text-muted-foreground hover:border-foreground/30"
+                    }`}
+                  >
+                    <div className="font-medium">Team vs Team</div>
+                    <div className="text-[10px] mt-0.5 opacity-70">Round-robin + 1v1 final</div>
+                  </button>
+                </div>
+              </Field>
+            )}
+
+            {showOptions && (
               <Field label="Respins per player">
                 <div className="grid grid-cols-4 gap-2">
                   {[0, 1, 2, 3].map((n) => (

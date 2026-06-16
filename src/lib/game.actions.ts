@@ -15,6 +15,7 @@ import {
   TURN_SECONDS,
   resolveRound,
   simSeason,
+  simMatchup,
   type DefenseMove,
   type DraftedPlayer,
   type OffenseMove,
@@ -268,6 +269,37 @@ export function runSim() {
   if (room.records[room.players[0].seat]) return;
   const seats = activeSeats(room);
   const records: Record<number, { wins: number; losses: number }> = {};
+
+  if ((room.gameMode ?? "classic") === "tvt") {
+    // Team vs Team — round-robin: every team plays every other team once.
+    for (const s of seats) records[s] = { wins: 0, losses: 0 };
+    const tvtMatchups: import("@/lib/p2p/store").TvtMatchup[] = [];
+    for (let i = 0; i < seats.length; i++) {
+      for (let j = i + 1; j < seats.length; j++) {
+        const sA = seats[i], sB = seats[j];
+        const result = simMatchup(teamOf(room, sA), teamOf(room, sB));
+        const winner = result === "A" ? sA : sB;
+        if (result === "A") { records[sA].wins++; records[sB].losses++; }
+        else { records[sB].wins++; records[sA].losses++; }
+        tvtMatchups.push({ seatA: sA, seatB: sB, winner });
+      }
+    }
+    // Always put the top-2 teams into the 1v1 tiebreaker.
+    const sorted = [...seats].sort((a, b) => records[b].wins - records[a].wins);
+    const tiebreakerPlayers = sorted.slice(0, 2) as [Seat, Seat];
+    commit({
+      ...room,
+      records: { ...room.records, ...records },
+      tvtMatchups,
+      phase: "tiebreaker_pick",
+      winner: null,
+      tiebreaker: makeFreshTiebreaker(tiebreakerPlayers),
+      tiebreakerPlayers,
+    });
+    return;
+  }
+
+  // Classic mode — each team sims its own 82-game season.
   for (const s of seats) records[s] = simSeason(teamOf(room, s));
   const perfect = seats.filter((s) => records[s].wins === 82);
   let winner: Seat | null = null;

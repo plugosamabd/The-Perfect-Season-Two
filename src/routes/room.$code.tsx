@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getPlayerId, getPlayerName } from "@/lib/identity";
 import { erasForTeam, getPlayersFor, teamColor, TEAMS_WITH_ROSTER, type Era, type Player, type Position } from "@/data/roster";
 import { POSITIONS, TURN_SECONDS, type DraftedPlayer, type Seat } from "@/lib/game";
-import { useP2PStore, roomManager, type GameRoom } from "@/lib/p2p";
+import { useP2PStore, roomManager, type GameRoom, type TvtMatchup } from "@/lib/p2p";
 import { loadRoomSnapshot } from "@/lib/p2p/room-manager";
 import { spin, spinEra, pickPlayer, runSim, pickAvatar, submitMove, autoPlay, respin } from "@/lib/game.actions";
 import { ChatBox } from "@/components/ChatBox";
@@ -90,7 +90,18 @@ function RoomPage() {
     return 0;
   }, [room, pid]);
 
+  // While we're still trying to resume/hydrate, show a neutral loading state
+  // instead of the 404 screen so the game doesn't get destroyed mid-reconnect.
   if (!room || room.code !== code) {
+    if (!resumeTried) {
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4">
+          <div className="max-w-sm text-center">
+            <div className="text-sm text-muted-foreground animate-pulse">Reconnecting…</div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
         <div className="max-w-sm text-center">
@@ -129,8 +140,18 @@ function RoomPage() {
         </Link>
         <div className="flex items-center gap-3 sm:gap-4">
           <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className={`w-1.5 h-1.5 rounded-full ${connected || room.players.length <= 1 ? "bg-emerald-400" : "bg-amber-400 animate-pulse"}`} />
-            {connected ? "Peers connected" : room.players.length > 1 ? "Connecting…" : "Solo"}
+            {(() => {
+              const isMultiplayer = room.players.length > 1;
+              const isSolo = !isMultiplayer;
+              const inGame = room.phase !== "lobby";
+              const isGreen = isSolo || connected || inGame;
+              return (
+                <>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isGreen ? "bg-emerald-400" : "bg-amber-400 animate-pulse"}`} />
+                  {isSolo ? "Solo" : connected ? "Connected" : inGame ? "Connected" : "Connecting…"}
+                </>
+              );
+            })()}
           </div>
           {(room.respinsTotal ?? 0) > 0 && realSeat > 0 && (
             <RespinControl canRespin={canRespinNow} respinsLeft={myRespinsLeft} />
@@ -351,6 +372,7 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     } else {
       const start = new Date(room.turnStartedAt).getTime();
       const remainMs = TURN_SECONDS * 1000 - (Date.now() - start);
+      // If time is already up (remainMs <= 0), fire immediately (250ms buffer).
       delay = Math.max(0, remainMs) + 250;
     }
 
@@ -359,7 +381,7 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
       autoPlay(step);
     }, delay);
     return () => clearTimeout(t);
-  }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, room.turnStartedAt, iAmHost]);
+  }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, room.turnStartedAt, iAmHost, remaining]);
 
   const gridCols = seats.length === 2 ? "grid-cols-1 sm:grid-cols-2"
     : seats.length === 3 ? "grid-cols-1 sm:grid-cols-3"
@@ -549,27 +571,107 @@ function Sim({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
 
   const seats = activeSeats(room);
   const cols = seats.length === 2 ? "grid-cols-2" : seats.length === 3 ? "grid-cols-3" : "grid-cols-1 sm:grid-cols-2";
+  const isTvt = (room.gameMode ?? "classic") === "tvt";
 
   return (
     <div className="py-10">
       <div className="text-center mb-8">
-        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Regular season</div>
-        <h2 className="font-display text-3xl sm:text-4xl mt-2">Simulating 82 games</h2>
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+          {isTvt ? "Team vs Team" : "Regular season"}
+        </div>
+        <h2 className="font-display text-3xl sm:text-4xl mt-2">
+          {isTvt ? "Running tournament" : "Simulating 82 games"}
+        </h2>
       </div>
       <div className={`grid ${cols} gap-3 max-w-3xl mx-auto`}>
         {seats.map((s) => (
-          <MiniScoreCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} focused={me === s} />
+          <MiniScoreCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} focused={me === s} isTvt={isTvt} />
         ))}
       </div>
       <div className="text-center mt-8 text-sm text-muted-foreground animate-pulse">
-        Crunching the numbers…
+        {isTvt ? "Simulating matchups…" : "Crunching the numbers…"}
       </div>
     </div>
   );
 }
 
-function MiniScoreCard({ seat, name, record, focused }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; focused: boolean }) {
-  const r = record ?? { wins: 0, losses: 82 };
+// Live bracket reveal shown after TVT sim completes (during tiebreaker_pick phase).
+function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const matchups = room.tvtMatchups ?? [];
+  // Reveal matchups one at a time, 800ms apart.
+  const [revealed, setRevealed] = useState(0);
+  useEffect(() => {
+    if (revealed >= matchups.length) return;
+    const t = setTimeout(() => setRevealed((r) => r + 1), 800);
+    return () => clearTimeout(t);
+  }, [revealed, matchups.length]);
+
+  const seats = activeSeats(room);
+  const sorted = [...seats].sort((a, b) => (seatRecord(room, b)?.wins ?? 0) - (seatRecord(room, a)?.wins ?? 0));
+  const finalists = (room.tiebreakerPlayers ?? sorted.slice(0, 2)) as SeatN[];
+
+  return (
+    <div className="py-10 max-w-2xl mx-auto">
+      <div className="text-center mb-8">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Team vs Team</div>
+        <h2 className="font-display text-3xl sm:text-4xl mt-2">Round-robin results</h2>
+      </div>
+
+      {/* Matchup cards */}
+      <div className="space-y-3 mb-8">
+        {matchups.map((m, i) => {
+          const visible = i < revealed;
+          const nameA = seatName(room, m.seatA as SeatN) ?? `P${m.seatA}`;
+          const nameB = seatName(room, m.seatB as SeatN) ?? `P${m.seatB}`;
+          const winnerIsA = m.winner === m.seatA;
+          return (
+            <div
+              key={i}
+              className={`bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3 transition-all duration-500 ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"}`}
+              style={{ transitionDelay: "0ms" }}
+            >
+              <div className={`flex-1 flex items-center gap-2 ${winnerIsA ? "" : "opacity-40"}`}>
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatA]}`} />
+                <span className={`text-sm font-medium truncate ${winnerIsA ? SEAT_TEXT[m.seatA] : ""}`}>{nameA}</span>
+                {winnerIsA && visible && <span className="ml-auto text-[10px] uppercase tracking-widest text-muted-foreground">W</span>}
+              </div>
+              <div className="text-xs text-muted-foreground font-mono px-2 flex-shrink-0">vs</div>
+              <div className={`flex-1 flex items-center gap-2 flex-row-reverse ${!winnerIsA ? "" : "opacity-40"}`}>
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatB]}`} />
+                <span className={`text-sm font-medium truncate ${!winnerIsA ? SEAT_TEXT[m.seatB] : ""}`}>{nameB}</span>
+                {!winnerIsA && visible && <span className="mr-auto text-[10px] uppercase tracking-widest text-muted-foreground">W</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Standings + finalists banner — only show after all matchups revealed */}
+      {revealed >= matchups.length && (
+        <div className="space-y-3">
+          <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground text-center mb-2">Standings</div>
+          {sorted.map((s, rank) => {
+            const r = seatRecord(room, s as SeatN) ?? { wins: 0, losses: 0 };
+            const isFinalist = finalists.includes(s as SeatN);
+            return (
+              <div key={s} className={`flex items-center gap-3 bg-card border rounded-xl px-4 py-3 ${isFinalist ? "border-foreground/40 ring-1 " + SEAT_RING[s] : "border-border opacity-70"}`}>
+                <span className="text-xs text-muted-foreground w-4 text-right">{rank + 1}</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[s]}`} />
+                <span className="flex-1 text-sm font-medium truncate">{seatName(room, s as SeatN)}</span>
+                <span className="font-mono text-sm">{r.wins}-{r.losses}</span>
+                {isFinalist && <span className="text-[10px] uppercase tracking-widest text-muted-foreground ml-1">Final</span>}
+              </div>
+            );
+          })}
+          <div className="text-center mt-6 text-sm text-muted-foreground animate-pulse">Preparing 1-on-1 final…</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniScoreCard({ seat, name, record, focused, isTvt }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; focused: boolean; isTvt?: boolean }) {
+  const r = record ?? (isTvt ? { wins: 0, losses: 0 } : { wins: 0, losses: 82 });
   return (
     <div className={`bg-card border rounded-xl p-4 ${focused ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-90"}`}>
       <div className="flex items-center gap-2">
@@ -579,18 +681,23 @@ function MiniScoreCard({ seat, name, record, focused }: { seat: SeatN; name: str
       <div className="font-mono text-3xl sm:text-4xl text-foreground text-center mt-3">
         {String(r.wins).padStart(2, "0")}-{String(r.losses).padStart(2, "0")}
       </div>
+      {isTvt && <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground text-center mt-1">vs teams</div>}
     </div>
   );
 }
 
 function ResultReveal({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const isTvt = (room.gameMode ?? "classic") === "tvt";
   const [done, setDone] = useState(false);
   useEffect(() => {
     setDone(false);
-    const t = setTimeout(() => setDone(true), 9000);
+    // In TVT mode, the result comes after the 1v1 tiebreaker, so skip the
+    // 82-game ticker animation and go straight to the result screen.
+    const delay = isTvt ? 0 : 9000;
+    const t = setTimeout(() => setDone(true), delay);
     return () => clearTimeout(t);
-  }, [room.code, room.updatedAt]);
-  if (done) return <Result room={room} me={me} />;
+  }, [room.code, room.updatedAt, isTvt]);
+  if (done || isTvt) return <Result room={room} me={me} />;
   return <FinalSim room={room} me={me} />;
 }
 
@@ -717,7 +824,7 @@ function Result({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
       </h2>
       <div className={`mt-8 grid ${cols} gap-3`}>
         {seats.map((s) => (
-          <FinalCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} roster={seatTeam(room, s)} winner={s === winner} />
+          <FinalCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} roster={seatTeam(room, s)} winner={s === winner} isTvt={(room.gameMode ?? "classic") === "tvt"} />
         ))}
       </div>
 
@@ -733,7 +840,7 @@ function Result({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   );
 }
 
-function FinalCard({ seat, name, record, roster, winner }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; roster: DraftedPlayer[]; winner: boolean }) {
+function FinalCard({ seat, name, record, roster, winner, isTvt }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; roster: DraftedPlayer[]; winner: boolean; isTvt?: boolean }) {
   return (
     <div className={`bg-card border rounded-xl p-3 text-left ${winner ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-80"}`}>
       <div className="flex items-center gap-2">
@@ -741,6 +848,7 @@ function FinalCard({ seat, name, record, roster, winner }: { seat: SeatN; name: 
         <div className="text-sm font-medium truncate">{name}</div>
       </div>
       <div className="font-mono text-3xl sm:text-4xl text-foreground my-2">{record?.wins ?? 0}-{record?.losses ?? 0}</div>
+      {isTvt && <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-1">vs teams</div>}
       <div className="space-y-0.5">
         {roster.map((p, i) => (
           <div key={i} className="text-[11px] flex justify-between text-muted-foreground">
@@ -776,11 +884,29 @@ function TiebreakerPick({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     }
   }, [room, tb, finalists, iAmHost]);
 
+  const isTvt = (room.gameMode ?? "classic") === "tvt";
+  const [bracketDone, setBracketDone] = useState(!isTvt);
+  const matchupCount = room.tvtMatchups?.length ?? 0;
+  // After all matchups + standings have been revealed (matchupCount * 0.8s + 1.5s grace), show the pick UI.
+  useEffect(() => {
+    if (!isTvt) return;
+    const delay = matchupCount * 800 + 2200;
+    const t = setTimeout(() => setBracketDone(true), delay);
+    return () => clearTimeout(t);
+  }, [isTvt, matchupCount]);
+
   return (
-    <div className="py-8 text-center max-w-3xl mx-auto">
-      <div className="text-[10px] uppercase tracking-[0.28em] text-emerald-300">Both perfect</div>
+    <div>
+      {isTvt && <TvtBracket room={room} me={me} />}
+      {(!isTvt || bracketDone) && (
+      <div className="py-8 text-center max-w-3xl mx-auto">
+      <div className={`text-[10px] uppercase tracking-[0.28em] ${isTvt ? "text-muted-foreground" : "text-emerald-300"}`}>
+        {isTvt ? "Team vs Team · Final" : "Both perfect"}
+      </div>
       <h2 className="font-display text-3xl sm:text-4xl mt-2 mb-2">1-on-1 tiebreaker</h2>
-      <p className="text-sm text-muted-foreground mb-8">Finalists pick their isolation player. First to 3 takes it.</p>
+      <p className="text-sm text-muted-foreground mb-8">
+        {isTvt ? "Top 2 teams clash. Pick your isolation player. First to 3 wins." : "Finalists pick their isolation player. First to 3 takes it."}
+      </p>
       <div className="grid grid-cols-2 gap-3 mb-8">
         {finalists.map((s) => (
           <AvatarSlot key={s} seat={s} name={seatName(room, s)} avatar={tb.avatars[String(s)]} />
@@ -804,6 +930,8 @@ function TiebreakerPick({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
         <div className="text-sm text-muted-foreground animate-pulse">Waiting for opponent…</div>
       )}
       {!isFinalist && <div className="text-sm text-muted-foreground">Watching the finals…</div>}
+    </div>
+      )}
     </div>
   );
 }

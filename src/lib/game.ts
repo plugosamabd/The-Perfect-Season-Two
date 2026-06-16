@@ -50,6 +50,20 @@ export function resolveRound(off: OffenseMove, def: DefenseMove): "offense" | "d
   return Math.random() < 0.5 ? "offense" : "defense";
 }
 
+// Head-to-head matchup between two teams. Returns "A" or "B".
+export function simMatchup(teamA: Player[], teamB: Player[]): "A" | "B" {
+  function strength(team: Player[]): number {
+    if (team.length === 0) return 70;
+    const avg = team.reduce((s, p) => s + p.rating, 0) / team.length;
+    const wow = team.filter((p) => p.wow).length * 0.5;
+    const era = team.reduce((s, p) => s + ERA_BOOST[p.era], 0) / team.length * 10;
+    return avg + wow + era;
+  }
+  const sA = strength(teamA);
+  const sB = strength(teamB);
+  return Math.random() < sA / (sA + sB) ? "A" : "B";
+}
+
 export function genRoomCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let s = "";

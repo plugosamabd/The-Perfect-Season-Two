@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { teamColor } from "@/data/roster";
 
-type Phase = "idle" | "spinning" | "done";
+type Phase = "idle" | "spinning" | "settling" | "done";
 
 export interface WheelSlice {
   label: string;
@@ -29,16 +29,27 @@ function shorten(label: string): string {
   return label;
 }
 
+// How long after the spin animation ends before we reveal the result in the hub.
+const SETTLE_MS = 600;
+
 export function SpinWheel({ slices, rotation, resultIndex, spinKey, spinning, title, onComplete }: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
   const step = 360 / Math.max(1, slices.length);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (settleTimer.current) { clearTimeout(settleTimer.current); settleTimer.current = null; }
     if (resultIndex == null) { setPhase("idle"); return; }
     if (spinning) { setPhase("spinning"); return; }
-    setPhase("done");
-    onComplete?.();
-    return undefined;
+    // Wheel just stopped — enter "settling" briefly before revealing the result.
+    setPhase("settling");
+    settleTimer.current = setTimeout(() => {
+      setPhase("done");
+      onComplete?.();
+    }, SETTLE_MS);
+    return () => {
+      if (settleTimer.current) clearTimeout(settleTimer.current);
+    };
   }, [spinKey, spinning, resultIndex, onComplete]);
 
   const wheelGradient = useMemo(() => {

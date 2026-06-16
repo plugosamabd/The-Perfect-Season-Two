@@ -2,7 +2,13 @@ import { peerManager } from "./peer-manager";
 import { useP2PStore, type GameRoom, type ChatMessage } from "./store";
 import { saveRoomSnapshot } from "./room-manager";
 
+const HEARTBEAT_MS = 10_000;
+const RECONNECT_DELAY_MS = 3_000;
+
 class GameSync {
+  private heartbeatId: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   init() {
     peerManager.on("sync-room", (data) => {
       const room = data as GameRoom;
@@ -17,7 +23,46 @@ class GameSync {
       useP2PStore.getState().addMessage(data as ChatMessage);
     });
 
-    peerManager.onConnectionChange((c) => useP2PStore.setState({ connected: c }));
+    peerManager.onConnectionChange((c) => {
+      useP2PStore.setState({ connected: c });
+      // If we're a guest and just lost our connection mid-game, schedule a reconnect.
+      if (!c && !peerManager.isHost) {
+        this.scheduleReconnect();
+      }
+    });
+
+    this.startHeartbeat();
+  }
+
+  private startHeartbeat() {
+    if (this.heartbeatId) clearInterval(this.heartbeatId);
+    this.heartbeatId = setInterval(() => {
+      const room = useP2PStore.getState().room;
+      if (!room || peerManager.isHost) return;
+      if (!peerManager.hasConnections()) {
+        this.scheduleReconnect();
+      } else {
+        // Re-sync periodically to stay fresh while connected.
+        this.requestSync();
+      }
+    }, HEARTBEAT_MS);
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer) return;
+    const room = useP2PStore.getState().room;
+    if (!room || room.phase === "lobby" || room.phase === "result") return;
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      const currentRoom = useP2PStore.getState().room;
+      if (!currentRoom) return;
+      try {
+        await peerManager.reconnectToHost(currentRoom.code);
+        this.requestSync();
+      } catch {
+        // Will retry on next heartbeat tick.
+      }
+    }, RECONNECT_DELAY_MS);
   }
 
   syncRoom(room: GameRoom) {
@@ -33,6 +78,11 @@ class GameSync {
   sendChat(msg: ChatMessage) {
     useP2PStore.getState().addMessage(msg);
     peerManager.broadcast("chat", msg);
+  }
+
+  destroy() {
+    if (this.heartbeatId) { clearInterval(this.heartbeatId); this.heartbeatId = null; }
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
   }
 }
 
