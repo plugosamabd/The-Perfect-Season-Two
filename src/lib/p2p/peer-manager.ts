@@ -91,8 +91,8 @@ class PeerManager {
       const msg = raw as P2PMessage;
       const h = this.handlers.get(msg.type);
       if (h) h(msg.data, msg.senderId);
-      // Host relays messages to other peers so everyone stays in sync.
-      if (this.isHost && msg.type !== "sync-room") this.relay(msg, conn.peer);
+      // Host relays all messages (including sync-room from guests) to other peers.
+      if (this.isHost) this.relay(msg, conn.peer);
     });
     conn.on("close", () => {
       this.connections.delete(conn.peer);
