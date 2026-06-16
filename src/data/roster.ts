@@ -483,11 +483,19 @@ function mergeRoster(): Player[] {
     const base = raw[era] ?? {};
     const extra = EXTRA[era] ?? {};
     const more = EXTRA_TEAMS[era] ?? {};
-    const teamSet = new Set<string>([...Object.keys(base), ...Object.keys(extra), ...Object.keys(more)]);
+    const nba = NBA_ROST[era] ?? {};
+    const teamSet = new Set<string>([
+      ...Object.keys(base),
+      ...Object.keys(extra),
+      ...Object.keys(more),
+      ...Object.keys(nba),
+    ]);
     for (const team of teamSet) {
       for (const [name, rating, wow] of (base[team] ?? [])) push(era, team, name as string, rating as number, wow);
       for (const [name, rating, wow] of (extra[team] ?? [])) push(era, team, name as string, rating as number, wow);
       for (const [name, rating, wow] of (more[team] ?? [])) push(era, team, name as string, rating as number, wow);
+      // DB-verified NBA players who played for this franchise in this era (last-team attribution).
+      for (const name of (nba[team] ?? [])) push(era, team, name, 72);
     }
   }
   return out;
