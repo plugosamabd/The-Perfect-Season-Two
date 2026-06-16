@@ -177,7 +177,7 @@ export function respin(playerId: string, which: "team" | "era"): boolean {
     };
   } else {
     // Respin team — keep era. Pick a team that has the current era; fallback to any.
-    const currentEra = sr.era;
+    const currentEra = sr.era as Era;
     const teams = TEAMS_WITH_ROSTER.filter((t) => t !== sr.team && erasForTeam(t).includes(currentEra));
     const pool = teams.length > 0 ? teams : TEAMS_WITH_ROSTER.filter((t) => t !== sr.team);
     if (pool.length === 0) return false;
