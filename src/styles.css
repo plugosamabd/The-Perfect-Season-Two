@@ -1,0 +1,169 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-team-one: var(--team-one);
+  --color-team-two: var(--team-two);
+  --color-accent-1: var(--accent-1);
+  --color-accent-2: var(--accent-2);
+
+  --font-display: "Sora", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  --radius: 0.625rem;
+
+  /* Minimal dark — neutral charcoal with subtle blue cast */
+  --background: oklch(0.16 0.005 250);
+  --foreground: oklch(0.96 0.005 250);
+  --card: oklch(0.21 0.006 250);
+  --card-foreground: oklch(0.96 0.005 250);
+  --popover: oklch(0.21 0.006 250);
+  --popover-foreground: oklch(0.96 0.005 250);
+  --primary: oklch(0.96 0.005 250);
+  --primary-foreground: oklch(0.16 0.005 250);
+  --secondary: oklch(0.26 0.006 250);
+  --secondary-foreground: oklch(0.96 0.005 250);
+  --muted: oklch(0.24 0.006 250);
+  --muted-foreground: oklch(0.62 0.012 250);
+  --accent: oklch(0.3 0.008 250);
+  --accent-foreground: oklch(0.96 0.005 250);
+  --destructive: oklch(0.7 0.18 22);
+  --destructive-foreground: oklch(0.98 0.01 90);
+  --border: oklch(0.28 0.006 250);
+  --input: oklch(0.28 0.006 250);
+  --ring: oklch(0.6 0.01 250);
+
+  /* Restrained seat accents — readable on dark, not garish */
+  --team-one: oklch(0.78 0.13 215);  /* cool blue */
+  --team-two: oklch(0.78 0.13 145);  /* sage green */
+  --accent-1: oklch(0.82 0.13 75);   /* warm amber */
+  --accent-2: oklch(0.78 0.13 320);  /* dusty pink */
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+  html, body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 60% 40% at 50% 0%, oklch(0.24 0.015 250 / 0.6) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 50% 100%, oklch(0.22 0.012 250 / 0.5) 0%, transparent 60%);
+  }
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    font-weight: 600;
+  }
+}
+
+@layer utilities {
+  .text-team-one { color: var(--team-one); }
+  .text-team-two { color: var(--team-two); }
+  .text-accent-1 { color: var(--accent-1); }
+  .text-accent-2 { color: var(--accent-2); }
+  .bg-team-one { background-color: var(--team-one); }
+  .bg-team-two { background-color: var(--team-two); }
+  .bg-accent-1 { background-color: var(--accent-1); }
+  .bg-accent-2 { background-color: var(--accent-2); }
+  .ring-team-one { --tw-ring-color: var(--team-one); }
+  .ring-team-two { --tw-ring-color: var(--team-two); }
+  .ring-accent-1 { --tw-ring-color: var(--accent-1); }
+  .ring-accent-2 { --tw-ring-color: var(--accent-2); }
+}
+
+@layer utilities {
+  /* Spin wheel */
+  .wheel-3d {
+    transform-style: preserve-3d;
+    perspective: 1000px;
+  }
+  @keyframes spin-wheel-once {
+    from { transform: rotateX(50deg) rotateZ(0deg); }
+    to   { transform: rotateX(50deg) rotateZ(var(--spin-target, 1800deg)); }
+  }
+  .animate-spin-wheel-once { animation: spin-wheel-once 3.4s cubic-bezier(.16,.72,.22,1) forwards; }
+  .wheel-resting { transform: rotateX(50deg) rotateZ(var(--spin-target, 0deg)); transition: transform 1s ease; }
+
+  @keyframes wheel-glow-rot {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  .wheel-glow {
+    position: absolute; inset: -10%;
+    border-radius: 9999px;
+    background: conic-gradient(from 0deg,
+      rgba(255,200,80,0.0) 0deg, rgba(255,200,80,0.55) 60deg,
+      rgba(120,180,255,0.0) 130deg, rgba(160,120,255,0.55) 200deg,
+      rgba(255,120,180,0.0) 280deg, rgba(255,200,80,0.55) 360deg);
+    filter: blur(28px);
+    opacity: 0.55;
+    animation: wheel-glow-rot 8s linear infinite;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .wheel-glow-strong { opacity: 0.95; animation-duration: 3s; }
+
+  @keyframes pointer-pulse {
+    0%, 100% { filter: drop-shadow(0 0 4px rgba(255,255,255,0.7)); transform: translateY(0); }
+    50%      { filter: drop-shadow(0 0 14px rgba(255,255,255,1)); transform: translateY(2px); }
+  }
+  .pointer-pulse { animation: pointer-pulse 0.6s ease-in-out infinite; }
+
+  @keyframes hub-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.0), inset 0 0 18px rgba(0,0,0,0.6); }
+    50%      { box-shadow: 0 0 40px 6px rgba(255,255,255,0.18), inset 0 0 22px rgba(0,0,0,0.6); }
+  }
+  .hub-pulse { animation: hub-pulse 2.4s ease-in-out infinite; }
+
+  @keyframes winner-pop {
+    0%   { opacity: 0; transform: scale(0.85); }
+    60%  { opacity: 1; transform: scale(1.06); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .animate-winner-pop { animation: winner-pop 0.6s cubic-bezier(.16,.8,.3,1.2) forwards; }
+
+  @keyframes flash-in {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .animate-flash-in { animation: flash-in 0.3s cubic-bezier(.17,.67,.21,1) forwards; }
+}

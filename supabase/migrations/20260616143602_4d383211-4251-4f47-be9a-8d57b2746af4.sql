@@ -1,0 +1,1 @@
+ALTER TABLE public.rooms ADD COLUMN IF NOT EXISTS turn_started_at timestamptz NOT NULL DEFAULT now();

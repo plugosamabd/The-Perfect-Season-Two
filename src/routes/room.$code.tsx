@@ -1,0 +1,868 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getPlayerId, getPlayerName } from "@/lib/identity";
+import { erasForTeam, getPlayersFor, teamColor, TEAMS_WITH_ROSTER, type Era, type Player, type Position } from "@/data/roster";
+import { POSITIONS, TURN_SECONDS, type DraftedPlayer, type Seat } from "@/lib/game";
+import { useP2PStore, roomManager, type GameRoom } from "@/lib/p2p";
+import { spin, spinEra, pickPlayer, runSim, pickAvatar, submitMove, autoPlay } from "@/lib/game.actions";
+import { ChatBox } from "@/components/ChatBox";
+import { SpinWheel, teamSlices, eraSlices } from "@/components/SpinWheel";
+import { PlayerPicker } from "@/components/PlayerPicker";
+import { Logo } from "@/components/Logo";
+import { ShareResult } from "@/components/ShareResult";
+import { sfx } from "@/lib/sound";
+
+export const Route = createFileRoute("/room/$code")({
+  head: ({ params }) => ({
+    meta: [
+      { title: `Room ${params.code} — 82-0` },
+      { name: "description", content: "Peer-to-peer 82-0 room." },
+    ],
+  }),
+  component: RoomPage,
+});
+
+type SeatN = Seat;
+const ALL_SEATS: SeatN[] = [1, 2, 3, 4];
+
+const SEAT_RING: Record<number, string> = {
+  1: "ring-team-one",
+  2: "ring-team-two",
+  3: "ring-accent-1",
+  4: "ring-accent-2",
+};
+const SEAT_TEXT: Record<number, string> = {
+  1: "text-team-one",
+  2: "text-team-two",
+  3: "text-accent-1",
+  4: "text-accent-2",
+};
+const SEAT_DOT: Record<number, string> = {
+  1: "bg-team-one",
+  2: "bg-team-two",
+  3: "bg-accent-1",
+  4: "bg-accent-2",
+};
+
+function seatPlayer(room: GameRoom, seat: SeatN) {
+  return room.players.find((p) => p.seat === seat) ?? null;
+}
+function seatName(room: GameRoom, seat: SeatN) { return seatPlayer(room, seat)?.name ?? null; }
+function seatId(room: GameRoom, seat: SeatN) { return seatPlayer(room, seat)?.id ?? null; }
+function seatTeam(room: GameRoom, seat: SeatN): DraftedPlayer[] { return room.teams[seat] ?? []; }
+function seatRecord(room: GameRoom, seat: SeatN) { return room.records[seat] ?? null; }
+function activeSeats(room: GameRoom): SeatN[] {
+  return room.players.map((p) => p.seat).sort((a, b) => a - b);
+}
+function isBot(room: GameRoom, seat: SeatN): boolean {
+  const id = seatId(room, seat);
+  return !!id && id.startsWith("bot_");
+}
+
+function RoomPage() {
+  const { code } = Route.useParams();
+  const room = useP2PStore((s) => s.room);
+  const connected = useP2PStore((s) => s.connected);
+  const [pid, setPid] = useState("");
+  const [myName, setMyName] = useState("");
+
+  useEffect(() => { setPid(getPlayerId()); setMyName(getPlayerName()); }, []);
+
+  const realSeat = useMemo<SeatN | 0>(() => {
+    if (!room) return 0;
+    for (const s of ALL_SEATS) if (seatId(room, s) === pid) return s;
+    return 0;
+  }, [room, pid]);
+
+  if (!room || room.code !== code) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-sm text-center">
+          <div className="font-display text-5xl text-foreground">404</div>
+          <h1 className="mt-3 font-display text-2xl">Room not found</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            P2P rooms live only in the host's browser. Ask the host for a fresh code.
+          </p>
+          <Link
+            to="/"
+            className="mt-6 inline-flex items-center justify-center rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90"
+          >
+            Go home
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen p-3 sm:p-6">
+      <header className="max-w-6xl mx-auto mb-6 flex items-center justify-between gap-3">
+        <Link to="/" aria-label="82-0 home" className="inline-flex items-center">
+          <Logo className="h-9 w-auto" />
+        </Link>
+        <div className="flex items-center gap-4">
+          <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className={`w-1.5 h-1.5 rounded-full ${connected || room.players.length <= 1 ? "bg-emerald-400" : "bg-amber-400 animate-pulse"}`} />
+            {connected ? "Peers connected" : room.players.length > 1 ? "Connecting…" : "Solo"}
+          </div>
+          <MuteToggle />
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Room</div>
+            <div className="font-mono text-lg tracking-[0.3em] text-foreground">{room.code}</div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto pb-40 sm:pb-32">
+        {room.phase === "lobby" && <Lobby room={room} me={realSeat} />}
+        {room.phase === "draft" && <Draft room={room} me={realSeat} />}
+        {room.phase === "sim" && <Sim room={room} me={realSeat} />}
+        {room.phase === "result" && <ResultReveal room={room} me={realSeat} />}
+        {room.phase === "tiebreaker_pick" && <TiebreakerPick room={room} me={realSeat} />}
+        {room.phase === "tiebreaker" && <Tiebreaker room={room} me={realSeat} />}
+        {realSeat === 0 && (
+          <div className="text-center text-xs text-muted-foreground mt-4">Spectating</div>
+        )}
+      </main>
+
+      <ChatBox myId={pid} myName={myName} mySeat={realSeat} />
+    </div>
+  );
+}
+
+function MuteToggle() {
+  const [muted, setMuted] = useState(false);
+  useEffect(() => { setMuted(sfx.isMuted()); }, []);
+  return (
+    <button
+      onClick={() => { const v = !muted; sfx.setMuted(v); setMuted(v); if (!v) sfx.click(); }}
+      aria-label={muted ? "Unmute" : "Mute"}
+      title={muted ? "Unmute" : "Mute"}
+      className="text-xs text-muted-foreground hover:text-foreground transition w-7 h-7 flex items-center justify-center rounded-md border border-border"
+    >
+      {muted ? "🔇" : "🔊"}
+    </button>
+  );
+}
+
+
+/* ---------------- LOBBY ---------------- */
+
+function Lobby({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const isHost = me === 1;
+  const count = activeSeats(room).length;
+  const slots = Array.from({ length: room.maxPlayers }, (_, i) => (i + 1) as SeatN);
+  const emptyCount = room.maxPlayers - count;
+  const [copied, setCopied] = useState(false);
+  const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/room/${room.code}` : "";
+
+  async function copy(value: string) {
+    try { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* */ }
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto text-center py-8 sm:py-12">
+      <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Lobby</div>
+      <h2 className="font-display text-3xl sm:text-4xl mt-2 mb-1">Waiting for players</h2>
+      <p className="text-sm text-muted-foreground mb-8">{count}/{room.maxPlayers} joined</p>
+
+      <div className="inline-flex flex-col items-center gap-3 bg-card border border-border rounded-2xl px-8 sm:px-12 py-6 mb-4">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Room code</div>
+        <div className="font-mono text-5xl sm:text-6xl tracking-[0.32em] text-foreground">{room.code}</div>
+        <button
+          onClick={() => copy(shareUrl)}
+          className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground transition"
+        >
+          {copied ? "Copied ✓" : "Copy invite link"}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-8 mt-4">
+        {slots.map((s) => (
+          <PlayerCard key={s} seat={s} name={seatName(room, s)} ready={!!seatId(room, s)} />
+        ))}
+      </div>
+
+      {isHost ? (
+        <div className="flex flex-col sm:flex-row gap-2 justify-center">
+          {emptyCount > 0 && (
+            <button
+              onClick={() => roomManager.addBot(getPlayerId())}
+              className="px-5 py-2.5 rounded-md border border-border text-sm text-foreground/80 hover:text-foreground hover:border-foreground/30 transition"
+            >
+              + Add CPU
+            </button>
+          )}
+          {count >= 2 && (
+            <button
+              onClick={() => roomManager.startGame(getPlayerId())}
+              className="px-6 py-2.5 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase hover:opacity-90"
+            >
+              Start draft
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="text-sm text-muted-foreground">Waiting for the host to start…</div>
+      )}
+    </div>
+  );
+}
+
+function PlayerCard({ seat, name, ready }: { seat: SeatN; name: string | null; ready: boolean }) {
+  return (
+    <div className={`px-3.5 py-3 rounded-lg border bg-card text-left ${ready ? "border-border" : "border-dashed border-border opacity-50"}`}>
+      <div className="flex items-center gap-2">
+        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+        <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">P{seat}</div>
+      </div>
+      <div className="font-medium text-sm mt-1 truncate">{name ?? "Waiting…"}</div>
+    </div>
+  );
+}
+
+/* ---------------- DRAFT ---------------- */
+
+function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const [spinning, setSpinning] = useState(false);
+  const seats = activeSeats(room);
+  const totalPicks = seats.reduce((s, sn) => s + seatTeam(room, sn).length, 0);
+  const round = Math.floor(totalPicks / seats.length) + 1;
+  const myTurn = room.currentTurn === me;
+  const turnSeat = room.currentTurn;
+  const turnName = seatName(room, turnSeat);
+  const turnIsBot = isBot(room, turnSeat);
+
+  const lastTsRef = useRef<number>(0);
+  useEffect(() => {
+    const ts = room.spinResult?.ts ?? 0;
+    if (ts && ts !== lastTsRef.current) {
+      lastTsRef.current = ts;
+      setSpinning(true);
+      sfx.spin();
+      const t = setTimeout(() => { setSpinning(false); sfx.land(); }, 3600);
+      return () => clearTimeout(t);
+    }
+    if (!room.spinResult) { lastTsRef.current = 0; setSpinning(false); }
+  }, [room.spinResult?.ts, room.spinResult]);
+
+  const lastPicksRef = useRef<number>(totalPicks);
+  useEffect(() => {
+    if (totalPicks > lastPicksRef.current) sfx.click();
+    lastPicksRef.current = totalPicks;
+  }, [totalPicks]);
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+  const turnStartMs = new Date(room.turnStartedAt).getTime();
+  const elapsed = Math.max(0, Math.floor((now - turnStartMs) / 1000));
+  const remaining = Math.max(0, TURN_SECONDS - elapsed);
+
+  const lastActedKey = useRef<string>("");
+  const iAmHost = me === 1;
+  useEffect(() => {
+    if (spinning) return;
+    if (room.phase !== "draft") return;
+    // Only host drives bots / timeouts to avoid duplicate broadcasts.
+    if (!iAmHost) return;
+    const key = `${room.currentTurn}-${totalPicks}-${room.spinResult?.ts ?? 0}`;
+    if (lastActedKey.current === key) return;
+    const step: "spin" | "pick" = (!room.spinResult || room.spinResult.era == null) ? "spin" : "pick";
+
+    let delay: number;
+    if (turnIsBot) {
+      delay = step === "spin" ? 800 + Math.random() * 600 : 2500 + Math.random() * 5000;
+    } else {
+      const start = new Date(room.turnStartedAt).getTime();
+      const remainMs = TURN_SECONDS * 1000 - (Date.now() - start);
+      delay = Math.max(0, remainMs) + 250;
+    }
+
+    const t = setTimeout(() => {
+      lastActedKey.current = key;
+      autoPlay(step);
+    }, delay);
+    return () => clearTimeout(t);
+  }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, room.turnStartedAt, iAmHost]);
+
+  const gridCols = seats.length === 2 ? "grid-cols-1 sm:grid-cols-2"
+    : seats.length === 3 ? "grid-cols-1 sm:grid-cols-3"
+    : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4";
+
+  const myTeam = me > 0 ? seatTeam(room, me as SeatN) : [];
+  const myOpenSlots = POSITIONS.filter((p) => !myTeam.some((t) => t.slot === p));
+
+  return (
+    <div>
+      <div className={`grid ${gridCols} gap-2.5 mb-6`}>
+        {seats.map((s) => (
+          <TeamPanel key={s} seat={s} name={seatName(room, s)} roster={seatTeam(room, s)} active={room.currentTurn === s} />
+        ))}
+      </div>
+
+      <div className="text-center mb-5">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Round {round} of 5</div>
+        <div className="text-base sm:text-lg mt-1">
+          <span className={`font-medium ${SEAT_TEXT[turnSeat]}`}>{turnName}</span>
+          <span className="text-muted-foreground"> · </span>
+          <span className="text-foreground/80">on the clock</span>
+          {turnIsBot && <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground ml-2">CPU</span>}
+        </div>
+        <TurnTimer remaining={remaining} />
+      </div>
+
+      <div className="py-4 sm:py-6">
+        {(() => {
+          const sr = room.spinResult;
+          // PHASE 1 — team wheel (also the resting state when nothing has been spun)
+          if (!sr || sr.era == null) {
+            const teams = TEAMS_WITH_ROSTER;
+            const slices = teamSlices(teams);
+            return (
+              <SpinWheel
+                slices={slices}
+                rotation={sr ? sr.teamRotation : null}
+                resultIndex={sr ? sr.teamIndex : null}
+                spinKey={sr ? sr.ts : 0}
+                spinning={spinning && (!sr || sr.era == null)}
+                title="Team"
+              />
+            );
+          }
+          // PHASE 2 — era wheel for the locked-in team
+          const eras = erasForTeam(sr.team);
+          const c = teamColor(sr.team);
+          const slices = eraSlices(eras, c.primary, c.accent);
+          return (
+            <SpinWheel
+              slices={slices}
+              rotation={sr.eraRotation}
+              resultIndex={sr.eraIndex}
+              spinKey={sr.ts}
+              spinning={spinning}
+              title={sr.team}
+            />
+          );
+        })()}
+
+        {/* Action buttons */}
+        {!spinning && (() => {
+          const sr = room.spinResult;
+          if (!sr) {
+            return (
+              <div className="text-center mt-8">
+                <button
+                  onClick={() => spin(getPlayerId())}
+                  disabled={!myTurn || turnIsBot}
+                  className="px-7 py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase disabled:opacity-30 hover:opacity-90 transition"
+                >
+                  {myTurn ? "Spin for team" : turnIsBot ? "CPU spinning…" : "Waiting…"}
+                </button>
+              </div>
+            );
+          }
+          if (sr.era == null) {
+            return (
+              <div className="text-center mt-8">
+                <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-3">
+                  Team locked in: <span className="text-foreground">{sr.team}</span>
+                </div>
+                <button
+                  onClick={() => spinEra(getPlayerId())}
+                  disabled={!myTurn || turnIsBot}
+                  className="px-7 py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase disabled:opacity-30 hover:opacity-90 transition"
+                >
+                  {myTurn ? "Spin for era" : turnIsBot ? "CPU spinning…" : "Waiting…"}
+                </button>
+              </div>
+            );
+          }
+          return null;
+        })()}
+      </div>
+
+      {room.spinResult && room.spinResult.era && !spinning && (
+        <div className="animate-flash-in mt-2">
+          <div className="text-center mb-6">
+            <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Spin result</div>
+            <div className="font-display text-3xl sm:text-4xl mt-2 text-foreground">
+              {room.spinResult.era} · {room.spinResult.team}
+            </div>
+            <div className="text-xs text-muted-foreground mt-2">
+              {myTurn ? "Pick a player and position" : turnIsBot ? "CPU picking…" : `Waiting for ${turnName}…`}
+            </div>
+          </div>
+          {myTurn && !turnIsBot ? (() => {
+            const takenKeys = new Set(seats.flatMap((s) => seatTeam(room, s)).map((p) => `${p.name}|${p.team}|${p.era}`));
+            return (
+              <PlayerPicker
+                players={getPlayersFor(room.spinResult.era as Era, room.spinResult.team)}
+                takenKeys={takenKeys}
+                canPick={true}
+                team={room.spinResult.team}
+                openSlots={myOpenSlots}
+                onPick={(name, position) => pickPlayer(getPlayerId(), name, position as Position)}
+              />
+            );
+          })() : (
+            <div className="text-center py-6">
+              <div className="inline-block px-6 py-4 rounded-xl border border-dashed border-border bg-card/40">
+                <div className="text-sm text-muted-foreground">
+                  {turnIsBot ? "CPU is thinking…" : `${turnName} is choosing`}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+function TurnTimer({ remaining }: { remaining: number }) {
+  const danger = remaining <= 10;
+  const pct = Math.min(100, (remaining / TURN_SECONDS) * 100);
+  return (
+    <div className="mt-2 max-w-[10rem] mx-auto">
+      <div className={`font-mono text-sm ${danger ? "text-destructive" : "text-muted-foreground"}`}>
+        {String(remaining).padStart(2, "0")}s
+      </div>
+      <div className="h-[2px] bg-border rounded-full overflow-hidden mt-1">
+        <div className={`h-full transition-all ${danger ? "bg-destructive" : "bg-foreground/60"}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function TeamPanel({ seat, name, roster, active }: { seat: SeatN; name: string | null; roster: DraftedPlayer[]; active?: boolean }) {
+  return (
+    <div className={`bg-card border rounded-xl p-3 ${active ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-90"}`}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+          <div className="text-sm font-medium truncate">{name ?? `Player ${seat}`}</div>
+        </div>
+        <div className="text-[10px] text-muted-foreground">{roster.length}/5</div>
+      </div>
+      <div className="space-y-1">
+        {POSITIONS.map((pos) => {
+          const p = roster.find((r) => r.slot === pos);
+          return (
+            <div key={pos} className={`px-2 py-1.5 rounded text-xs flex items-center gap-2 ${p ? "bg-background" : "bg-background/40 border border-dashed border-border"}`}>
+              <span className="font-mono font-medium text-[10px] w-6 text-muted-foreground">{pos}</span>
+              {p ? <span className="truncate flex-1">{p.name}</span> : <span className="text-muted-foreground flex-1">empty</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- SIM ---------------- */
+
+function Sim({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const [started, setStarted] = useState(false);
+  const iAmHost = me === 1;
+  useEffect(() => {
+    if (started || !iAmHost) return;
+    setStarted(true);
+    runSim();
+  }, [iAmHost, started]);
+
+  const seats = activeSeats(room);
+  const cols = seats.length === 2 ? "grid-cols-2" : seats.length === 3 ? "grid-cols-3" : "grid-cols-1 sm:grid-cols-2";
+
+  return (
+    <div className="py-10">
+      <div className="text-center mb-8">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Regular season</div>
+        <h2 className="font-display text-3xl sm:text-4xl mt-2">Simulating 82 games</h2>
+      </div>
+      <div className={`grid ${cols} gap-3 max-w-3xl mx-auto`}>
+        {seats.map((s) => (
+          <MiniScoreCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} focused={me === s} />
+        ))}
+      </div>
+      <div className="text-center mt-8 text-sm text-muted-foreground animate-pulse">
+        Crunching the numbers…
+      </div>
+    </div>
+  );
+}
+
+function MiniScoreCard({ seat, name, record, focused }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; focused: boolean }) {
+  const r = record ?? { wins: 0, losses: 82 };
+  return (
+    <div className={`bg-card border rounded-xl p-4 ${focused ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-90"}`}>
+      <div className="flex items-center gap-2">
+        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+        <div className="text-sm font-medium truncate">{name}</div>
+      </div>
+      <div className="font-mono text-3xl sm:text-4xl text-foreground text-center mt-3">
+        {String(r.wins).padStart(2, "0")}-{String(r.losses).padStart(2, "0")}
+      </div>
+    </div>
+  );
+}
+
+function ResultReveal({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    setDone(false);
+    const t = setTimeout(() => setDone(true), 9000);
+    return () => clearTimeout(t);
+  }, [room.code, room.updatedAt]);
+  if (done) return <Result room={room} me={me} />;
+  return <FinalSim room={room} me={me} />;
+}
+
+function FinalSim({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const seat = (me > 0 ? me : activeSeats(room)[0] ?? 1) as SeatN;
+  const record = seatRecord(room, seat);
+  const roster = seatTeam(room, seat);
+  const name = seatName(room, seat) ?? "Final results";
+  const total = 82;
+  const finalRecord = record ?? { wins: 0, losses: 82 };
+  const seq = useMemo(() => {
+    const items: ("W" | "L")[] = [
+      ...Array(finalRecord.wins).fill("W"),
+      ...Array(finalRecord.losses).fill("L"),
+    ];
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return items;
+  }, [finalRecord.wins, finalRecord.losses]);
+  const [shown, setShown] = useState(0);
+  const winsShown = seq.slice(0, shown).filter((r) => r === "W").length;
+  const lossesShown = seq.slice(0, shown).filter((r) => r === "L").length;
+
+  useEffect(() => {
+    setShown(0);
+    let i = 0;
+    const id = setInterval(() => {
+      i += 1; setShown(i);
+      if (i >= total) clearInterval(id);
+    }, 110);
+    return () => clearInterval(id);
+  }, [room.code, room.updatedAt, total]);
+
+  return (
+    <div className="py-8 sm:py-12 max-w-3xl mx-auto">
+      <div className="text-center mb-6">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Season sim</div>
+        <h2 className="font-display text-3xl sm:text-4xl mt-2 truncate">{name}</h2>
+      </div>
+
+      <div className="bg-card border border-border rounded-2xl p-4 sm:p-6">
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <div className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+            <div className="text-sm font-medium">{name}</div>
+          </div>
+          <div className="font-mono text-3xl sm:text-4xl text-foreground">
+            {String(winsShown).padStart(2, "0")}-{String(lossesShown).padStart(2, "0")}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-10 sm:grid-cols-14 gap-1">
+          {seq.map((result, index) => {
+            const visible = index < shown;
+            return (
+              <div
+                key={`${index}-${result}`}
+                className={`aspect-square rounded flex items-center justify-center text-[10px] font-medium transition-all duration-200 ${
+                  visible
+                    ? result === "W"
+                      ? "bg-emerald-500/15 text-emerald-300 border border-emerald-400/40"
+                      : "bg-rose-500/10 text-rose-300/80 border border-rose-400/30"
+                    : "bg-background/40 text-transparent border border-border/40"
+                }`}
+              >
+                {visible ? result : "·"}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <Stat label="Wins" value={finalRecord.wins} tone="emerald" />
+          <Stat label="Losses" value={finalRecord.losses} tone="rose" />
+        </div>
+
+        <div className="mt-4 grid gap-1">
+          {roster.slice(0, 5).map((p, i) => (
+            <div key={i} className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="truncate"><span className="font-mono mr-1">{p.slot}</span>{p.name}</span>
+              <span className="ml-2 shrink-0">{p.era} · {p.rating}{p.wow ? " ★" : ""}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: number; tone: "emerald" | "rose" }) {
+  const c = tone === "emerald" ? "border-emerald-400/30 bg-emerald-500/5 text-emerald-300" : "border-rose-400/30 bg-rose-500/5 text-rose-300";
+  return (
+    <div className={`rounded-xl border p-3 text-center ${c}`}>
+      <div className="text-[10px] uppercase tracking-[0.18em] opacity-70">{label}</div>
+      <div className="font-display text-3xl mt-0.5">{value}</div>
+    </div>
+  );
+}
+
+/* ---------------- RESULT ---------------- */
+
+function Result({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const winner = room.winner ?? 0;
+  const tie = winner === 0;
+  const youWin = winner === me && me !== 0;
+  const winnerName = winner > 0 ? seatName(room, winner as SeatN) : null;
+  const seats = activeSeats(room);
+  const cols = seats.length === 2 ? "grid-cols-1 sm:grid-cols-2"
+    : seats.length === 3 ? "grid-cols-1 sm:grid-cols-3"
+    : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4";
+
+  useEffect(() => {
+    if (youWin) sfx.fanfare();
+    else if (!tie) sfx.buzzer();
+  }, [youWin, tie]);
+
+  return (
+    <div className="py-10 text-center max-w-5xl mx-auto">
+      <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Final</div>
+      <h2 className={`font-display text-4xl sm:text-5xl mt-2 ${youWin ? "text-emerald-300" : "text-foreground"}`}>
+        {tie ? "Tie" : `${winnerName} wins`}
+      </h2>
+      <div className={`mt-8 grid ${cols} gap-3`}>
+        {seats.map((s) => (
+          <FinalCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} roster={seatTeam(room, s)} winner={s === winner} />
+        ))}
+      </div>
+
+      <ShareResult room={room} winnerSeat={winner as SeatN | 0} youWin={youWin} />
+
+      <button
+        onClick={() => roomManager.resetRoom()}
+        className="mt-6 px-6 py-2.5 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase hover:opacity-90"
+      >
+        Rematch
+      </button>
+    </div>
+  );
+}
+
+function FinalCard({ seat, name, record, roster, winner }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; roster: DraftedPlayer[]; winner: boolean }) {
+  return (
+    <div className={`bg-card border rounded-xl p-3 text-left ${winner ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-80"}`}>
+      <div className="flex items-center gap-2">
+        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+        <div className="text-sm font-medium truncate">{name}</div>
+      </div>
+      <div className="font-mono text-3xl sm:text-4xl text-foreground my-2">{record?.wins ?? 0}-{record?.losses ?? 0}</div>
+      <div className="space-y-0.5">
+        {roster.map((p, i) => (
+          <div key={i} className="text-[11px] flex justify-between text-muted-foreground">
+            <span className="truncate"><span className="font-mono mr-1">{p.slot}</span>{p.name}</span>
+            <span className="ml-2 shrink-0">{p.era} · {p.rating}{p.wow ? " ★" : ""}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- TIEBREAKER PICK ---------------- */
+
+function TiebreakerPick({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const tb = room.tiebreaker!;
+  const finalists = tb.players;
+  const isFinalist = finalists.includes(me as SeatN);
+  const myAvatar = isFinalist ? tb.avatars[String(me)] : null;
+  const myRoster: DraftedPlayer[] = isFinalist ? seatTeam(room, me as SeatN) : [];
+  const iAmHost = me === 1;
+
+  useEffect(() => {
+    if (!iAmHost) return;
+    for (const s of finalists) {
+      if (isBot(room, s) && !tb.avatars[String(s)]) {
+        const team = seatTeam(room, s);
+        if (team.length === 0) continue;
+        const pick = team.reduce((a, b) => (a.rating >= b.rating ? a : b));
+        const t = setTimeout(() => pickAvatar(getPlayerId(), pick.name), 700);
+        return () => clearTimeout(t);
+      }
+    }
+  }, [room, tb, finalists, iAmHost]);
+
+  return (
+    <div className="py-8 text-center max-w-3xl mx-auto">
+      <div className="text-[10px] uppercase tracking-[0.28em] text-emerald-300">Both perfect</div>
+      <h2 className="font-display text-3xl sm:text-4xl mt-2 mb-2">1-on-1 tiebreaker</h2>
+      <p className="text-sm text-muted-foreground mb-8">Finalists pick their isolation player. First to 3 takes it.</p>
+      <div className="grid grid-cols-2 gap-3 mb-8">
+        {finalists.map((s) => (
+          <AvatarSlot key={s} seat={s} name={seatName(room, s)} avatar={tb.avatars[String(s)]} />
+        ))}
+      </div>
+      {isFinalist && !myAvatar && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          {myRoster.map((p, i) => (
+            <button
+              key={i}
+              onClick={() => pickAvatar(getPlayerId(), p.name)}
+              className="p-3 rounded-lg border border-border bg-card hover:border-foreground/40 transition text-left"
+            >
+              <div className="text-sm font-medium">{p.name}</div>
+              <div className="text-[10px] text-muted-foreground mt-0.5">{p.slot} · {p.era}</div>
+            </button>
+          ))}
+        </div>
+      )}
+      {isFinalist && myAvatar && finalists.some((s) => !tb.avatars[String(s)]) && (
+        <div className="text-sm text-muted-foreground animate-pulse">Waiting for opponent…</div>
+      )}
+      {!isFinalist && <div className="text-sm text-muted-foreground">Watching the finals…</div>}
+    </div>
+  );
+}
+
+function AvatarSlot({ seat, name, avatar }: { seat: SeatN; name: string | null; avatar: Player | null }) {
+  return (
+    <div className={`p-5 border rounded-xl ${avatar ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-dashed border-border opacity-60"}`}>
+      <div className="flex items-center gap-2 justify-center">
+        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+        <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{name}</div>
+      </div>
+      <div className="font-display text-2xl mt-2">{avatar?.name ?? "…"}</div>
+      {avatar && <div className="text-[10px] text-muted-foreground mt-1">{avatar.era}</div>}
+    </div>
+  );
+}
+
+/* ---------------- TIEBREAKER ---------------- */
+
+function Tiebreaker({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const tb = room.tiebreaker!;
+  const finalists = tb.players;
+  const isFinalist = finalists.includes(me as SeatN);
+  const myMove = isFinalist ? tb.moves[String(me)] : null;
+  const oppSeat = finalists.find((s) => s !== me) as SeatN | undefined;
+  const oppMoveSubmitted = oppSeat ? !!tb.moves[String(oppSeat)] : false;
+  const iAmOffense = tb.offense === me;
+  const offenseSeat = tb.offense;
+  const defenseSeat = finalists.find((s) => s !== offenseSeat) as SeatN;
+  const offenseName = tb.avatars[String(offenseSeat)]?.name;
+  const defenseName = tb.avatars[String(defenseSeat)]?.name;
+  const iAmHost = me === 1;
+
+  useEffect(() => {
+    if (!iAmHost) return;
+    for (const s of finalists) {
+      if (isBot(room, s) && !tb.moves[String(s)]) {
+        const onOffense = tb.offense === s;
+        const moves = onOffense ? ["drive", "shoot", "fade"] : ["paint", "perimeter"];
+        const m = moves[Math.floor(Math.random() * moves.length)];
+        const t = setTimeout(() => submitMove(getPlayerId(), m), 900);
+        return () => clearTimeout(t);
+      }
+    }
+  }, [room, tb, finalists, iAmHost]);
+
+  return (
+    <div className="py-6 max-w-3xl mx-auto">
+      <div className="flex items-center justify-center gap-10 mb-6">
+        <ScoreCol seat={finalists[0]} name={seatName(room, finalists[0])} score={tb.scores[String(finalists[0])] ?? 0} />
+        <div className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Rd {tb.round}</div>
+        <ScoreCol seat={finalists[1]} name={seatName(room, finalists[1])} score={tb.scores[String(finalists[1])] ?? 0} />
+      </div>
+
+      <div className="text-center mb-6">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Matchup</div>
+        <div className="text-lg sm:text-xl mt-1">
+          <span className={`font-medium ${SEAT_TEXT[offenseSeat]}`}>{offenseName}</span>
+          <span className="text-muted-foreground"> on </span>
+          <span className={`font-medium ${SEAT_TEXT[defenseSeat]}`}>{defenseName}</span>
+        </div>
+        {isFinalist && (
+          <div className="text-xs mt-2 text-muted-foreground">
+            You are on <span className="text-foreground">{iAmOffense ? "OFFENSE" : "DEFENSE"}</span>
+          </div>
+        )}
+      </div>
+
+      {isFinalist && !myMove && (
+        <div className="max-w-xl mx-auto">
+          {iAmOffense ? (
+            <div className="grid grid-cols-3 gap-2">
+              <MoveBtn label="Drive" desc="Attack rim" onClick={() => submitMove(getPlayerId(), "drive")} />
+              <MoveBtn label="Shoot" desc="Catch & shoot" onClick={() => submitMove(getPlayerId(), "shoot")} />
+              <MoveBtn label="Fade" desc="Step-back" onClick={() => submitMove(getPlayerId(), "fade")} />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <MoveBtn label="Paint" desc="Protect rim" onClick={() => submitMove(getPlayerId(), "paint")} />
+              <MoveBtn label="Perimeter" desc="Close out" onClick={() => submitMove(getPlayerId(), "perimeter")} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {isFinalist && myMove && !oppMoveSubmitted && (
+        <div className="text-center text-sm text-muted-foreground animate-pulse">Waiting for opponent…</div>
+      )}
+      {!isFinalist && <div className="text-center text-sm text-muted-foreground">Watching the 1v1…</div>}
+
+      {tb.history.length > 0 && (
+        <div className="mt-10">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Plays</div>
+          <div className="space-y-1">
+            {tb.history.map((h, i) => (
+              <div key={i} className="flex items-center justify-between bg-card border border-border rounded px-3 py-2 text-xs">
+                <span className="text-muted-foreground">R{h.round}</span>
+                {finalists.map((s) => (
+                  <span key={s} className={SEAT_TEXT[s]}>P{s}: {h.moves[String(s)]}</span>
+                ))}
+                <span className={`${SEAT_TEXT[h.roundWinner]} font-medium`}>
+                  +1 {seatName(room, h.roundWinner)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScoreCol({ seat, name, score }: { seat: SeatN; name: string | null; score: number }) {
+  return (
+    <div className="text-center">
+      <div className="flex items-center justify-center gap-2">
+        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+        <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{name}</div>
+      </div>
+      <div className="font-mono text-5xl text-foreground mt-1">{score}</div>
+    </div>
+  );
+}
+
+function MoveBtn({ label, desc, onClick }: { label: string; desc: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="p-4 rounded-lg border border-border bg-card hover:border-foreground/40 transition text-left"
+    >
+      <div className="text-base font-medium">{label}</div>
+      <div className="text-[11px] text-muted-foreground mt-0.5">{desc}</div>
+    </button>
+  );
+}
