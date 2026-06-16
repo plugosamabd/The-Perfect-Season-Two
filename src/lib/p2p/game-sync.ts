@@ -13,7 +13,11 @@ class GameSync {
     peerManager.on("sync-room", (data) => {
       const room = data as GameRoom;
       useP2PStore.setState({ room });
-      if (peerManager.isHost) saveRoomSnapshot(room);
+      if (peerManager.isHost) {
+        saveRoomSnapshot(room);
+        // Re-broadcast to all other peers so guests receive each other's actions.
+        peerManager.broadcast("sync-room", room);
+      }
     });
     peerManager.on("request-sync", (_data, senderId) => {
       const room = useP2PStore.getState().room;
