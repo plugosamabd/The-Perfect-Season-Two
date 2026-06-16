@@ -113,11 +113,18 @@ const BIG_MAN_PLAYERS = new Set([
 ]);
 
 
+import NBA_POSITIONS from "./nba/positions.json";
+import NBA_ROSTERS from "./nba/rosters.json";
+
+const NBA_POS = NBA_POSITIONS as Record<string, Position[]>;
+const NBA_ROST = NBA_ROSTERS as Record<string, Record<string, string[]>>;
+
 export function getPositions(name: string): Position[] {
   const normalized = name.trim();
-  const base = POSITION_OVERRIDES[normalized]
-    ?? (BIG_MAN_PLAYERS.has(normalized) ? ["PF", "C"] as Position[] : ["PG", "SG", "SF"] as Position[]);
-  // Position flex: any C-eligible player can slot at PF, any PF-eligible can slot at C.
+  const base =
+    POSITION_OVERRIDES[normalized] ??
+    NBA_POS[normalized] ??
+    (BIG_MAN_PLAYERS.has(normalized) ? (["PF", "C"] as Position[]) : (["PG", "SG", "SF"] as Position[]));
   const set = new Set<Position>(base);
   if (set.has("C")) set.add("PF");
   if (set.has("PF")) set.add("C");
