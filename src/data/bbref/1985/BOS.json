@@ -1,0 +1,296 @@
+{
+  "season": "1984-85",
+  "abbrev": "BOS",
+  "url": "https://www.basketball-reference.com/teams/BOS/1985.html",
+  "team_name": "Boston Celtics",
+  "roster": [
+    {
+      "name": "Danny Ainge",
+      "position": "SG",
+      "height": "6-5",
+      "weight": "185",
+      "birthdate": "March 17, 1959",
+      "college": "BYU",
+      "experience": "3"
+    },
+    {
+      "name": "Larry Bird",
+      "position": "SF",
+      "height": "6-9",
+      "weight": "220",
+      "birthdate": "December 7, 1956",
+      "college": "Indiana State University",
+      "experience": "5"
+    },
+    {
+      "name": "Quinn Buckner",
+      "position": "PG",
+      "height": "6-3",
+      "weight": "190",
+      "birthdate": "August 20, 1954",
+      "college": "Indiana",
+      "experience": "8"
+    },
+    {
+      "name": "Rick Carlisle",
+      "position": "SG",
+      "height": "6-5",
+      "weight": "210",
+      "birthdate": "October 27, 1959",
+      "college": "University of Maine, Virginia",
+      "experience": "R"
+    },
+    {
+      "name": "M.L. Carr",
+      "position": "SF",
+      "height": "6-6",
+      "weight": "205",
+      "birthdate": "January 9, 1951",
+      "college": "Guilford College",
+      "experience": "9"
+    },
+    {
+      "name": "Carlos Clark",
+      "position": "SG",
+      "height": "6-4",
+      "weight": "210",
+      "birthdate": "August 10, 1960",
+      "college": "Ole Miss",
+      "experience": "1"
+    },
+    {
+      "name": "Dennis Johnson",
+      "position": "PG",
+      "height": "6-4",
+      "weight": "185",
+      "birthdate": "September 18, 1954",
+      "college": "Harbor College, Pepperdine",
+      "experience": "8"
+    },
+    {
+      "name": "Greg Kite",
+      "position": "C",
+      "height": "6-11",
+      "weight": "250",
+      "birthdate": "August 5, 1961",
+      "college": "BYU",
+      "experience": "1"
+    },
+    {
+      "name": "Cedric Maxwell",
+      "position": "SF",
+      "height": "6-8",
+      "weight": "205",
+      "birthdate": "November 21, 1955",
+      "college": "UNC Charlotte",
+      "experience": "7"
+    },
+    {
+      "name": "Kevin McHale",
+      "position": "PF",
+      "height": "6-10",
+      "weight": "210",
+      "birthdate": "December 19, 1957",
+      "college": "Minnesota",
+      "experience": "4"
+    },
+    {
+      "name": "Robert Parish",
+      "position": "C",
+      "height": "7-1",
+      "weight": "230",
+      "birthdate": "August 30, 1953",
+      "college": "Centenary (LA)",
+      "experience": "8"
+    },
+    {
+      "name": "Scott Wedman",
+      "position": "SF",
+      "height": "6-7",
+      "weight": "215",
+      "birthdate": "July 29, 1952",
+      "college": "Colorado",
+      "experience": "10"
+    },
+    {
+      "name": "Ray Williams",
+      "position": "PG",
+      "height": "6-3",
+      "weight": "188",
+      "birthdate": "October 14, 1954",
+      "college": "Minnesota",
+      "experience": "7"
+    }
+  ],
+  "per_game": [
+    {
+      "name": "Larry Bird",
+      "games": 80,
+      "mpg": 39.5,
+      "ppg": 28.7,
+      "rpg": 10.5,
+      "apg": 6.6,
+      "spg": 1.6,
+      "bpg": 1.2,
+      "fg_pct": 52.2,
+      "fg3_pct": 42.7,
+      "ft_pct": 88.2
+    },
+    {
+      "name": "Dennis Johnson",
+      "games": 80,
+      "mpg": 37.2,
+      "ppg": 15.7,
+      "rpg": 4,
+      "apg": 6.8,
+      "spg": 1.2,
+      "bpg": 0.5,
+      "fg_pct": 46.2,
+      "fg3_pct": 26.9,
+      "ft_pct": 85.3
+    },
+    {
+      "name": "Robert Parish",
+      "games": 79,
+      "mpg": 36.1,
+      "ppg": 17.6,
+      "rpg": 10.6,
+      "apg": 1.6,
+      "spg": 0.7,
+      "bpg": 1.3,
+      "fg_pct": 54.2,
+      "fg3_pct": 0,
+      "ft_pct": 74.3
+    },
+    {
+      "name": "Kevin McHale",
+      "games": 79,
+      "mpg": 33.6,
+      "ppg": 19.8,
+      "rpg": 9,
+      "apg": 1.8,
+      "spg": 0.4,
+      "bpg": 1.5,
+      "fg_pct": 57,
+      "fg3_pct": 0,
+      "ft_pct": 76
+    },
+    {
+      "name": "Danny Ainge",
+      "games": 75,
+      "mpg": 34.2,
+      "ppg": 12.9,
+      "rpg": 3.6,
+      "apg": 5.3,
+      "spg": 1.6,
+      "bpg": 0.1,
+      "fg_pct": 52.9,
+      "fg3_pct": 26.8,
+      "ft_pct": 86.8
+    },
+    {
+      "name": "Cedric Maxwell",
+      "games": 57,
+      "mpg": 26.2,
+      "ppg": 11.1,
+      "rpg": 4.2,
+      "apg": 1.8,
+      "spg": 0.6,
+      "bpg": 0.3,
+      "fg_pct": 53.3,
+      "fg3_pct": 0,
+      "ft_pct": 83.1
+    },
+    {
+      "name": "Scott Wedman",
+      "games": 78,
+      "mpg": 14.4,
+      "ppg": 6.4,
+      "rpg": 2,
+      "apg": 1.2,
+      "spg": 0.3,
+      "bpg": 0.1,
+      "fg_pct": 47.8,
+      "fg3_pct": 50,
+      "ft_pct": 76.4
+    },
+    {
+      "name": "Quinn Buckner",
+      "games": 75,
+      "mpg": 11.4,
+      "ppg": 2.4,
+      "rpg": 1.2,
+      "apg": 2,
+      "spg": 0.8,
+      "bpg": 0,
+      "fg_pct": 38.3,
+      "fg3_pct": 0,
+      "ft_pct": 64
+    },
+    {
+      "name": "Carlos Clark",
+      "games": 62,
+      "mpg": 9.1,
+      "ppg": 2.7,
+      "rpg": 1.1,
+      "apg": 0.8,
+      "spg": 0,
+      "bpg": 0,
+      "fg_pct": 42.1,
+      "fg3_pct": 0,
+      "ft_pct": 77.4
+    },
+    {
+      "name": "Greg Kite",
+      "games": 55,
+      "mpg": 7.7,
+      "ppg": 1.6,
+      "rpg": 1.6,
+      "apg": 0.3,
+      "spg": 0.1,
+      "bpg": 0.2,
+      "fg_pct": 37.5,
+      "fg3_pct": 0,
+      "ft_pct": 68.8
+    },
+    {
+      "name": "Rick Carlisle",
+      "games": 38,
+      "mpg": 4.7,
+      "ppg": 1.8,
+      "rpg": 0.6,
+      "apg": 0.6,
+      "spg": 0.1,
+      "bpg": 0,
+      "fg_pct": 38.8,
+      "fg3_pct": 0,
+      "ft_pct": 88.2
+    },
+    {
+      "name": "M.L. Carr",
+      "games": 47,
+      "mpg": 8.4,
+      "ppg": 3.2,
+      "rpg": 0.9,
+      "apg": 0.5,
+      "spg": 0.1,
+      "bpg": 0,
+      "fg_pct": 41.6,
+      "fg3_pct": 39.1,
+      "ft_pct": 100
+    },
+    {
+      "name": "Ray Williams",
+      "games": 23,
+      "mpg": 14.6,
+      "ppg": 6.4,
+      "rpg": 1.9,
+      "apg": 3.9,
+      "spg": 1.3,
+      "bpg": 0.1,
+      "fg_pct": 38.5,
+      "fg3_pct": 26.1,
+      "ft_pct": 67.4
+    }
+  ]
+}
