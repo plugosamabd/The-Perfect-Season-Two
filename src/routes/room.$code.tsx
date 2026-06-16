@@ -175,6 +175,49 @@ function MuteToggle() {
   );
 }
 
+function RespinControl({ canRespin, respinsLeft }: { canRespin: boolean; respinsLeft: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={!canRespin}
+        onClick={() => setOpen((v) => !v)}
+        title={canRespin ? "Use a respin" : respinsLeft === 0 ? "No respins left" : "Respin only on your turn after a spin"}
+        className="px-2.5 h-7 inline-flex items-center gap-1.5 rounded-md border border-border text-[11px] uppercase tracking-[0.16em] text-foreground/80 hover:text-foreground hover:border-foreground/30 transition disabled:opacity-40 disabled:hover:text-foreground/80 disabled:hover:border-border"
+      >
+        <span>↻ Respin</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{respinsLeft}</span>
+      </button>
+      {open && canRespin && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-44 bg-card border border-border rounded-lg shadow-lg z-40 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => { setOpen(false); respin(getPlayerId(), "team"); }}
+              className="w-full text-left px-3 py-2 text-xs hover:bg-foreground/5 transition"
+            >
+              <div className="font-medium">Respin team</div>
+              <div className="text-[10px] text-muted-foreground">Keep era · new team</div>
+            </button>
+            <div className="h-px bg-border" />
+            <button
+              type="button"
+              onClick={() => { setOpen(false); respin(getPlayerId(), "era"); }}
+              className="w-full text-left px-3 py-2 text-xs hover:bg-foreground/5 transition"
+            >
+              <div className="font-medium">Respin era</div>
+              <div className="text-[10px] text-muted-foreground">Keep team · new era</div>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 
 /* ---------------- LOBBY ---------------- */
 
