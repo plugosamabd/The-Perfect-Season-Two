@@ -453,13 +453,15 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
         {/* Action buttons */}
         {!spinning && (() => {
           const sr = room.spinResult;
+          const urgent = myTurn && !turnIsBot && remaining <= 10;
+          const critical = myTurn && !turnIsBot && remaining <= 5;
           if (!sr) {
             return (
               <div className="text-center mt-8">
                 <button
                   onClick={() => spin(getPlayerId())}
                   disabled={!myTurn || turnIsBot}
-                  className="px-7 py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase disabled:opacity-30 hover:opacity-90 transition"
+                  className={`px-7 py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase disabled:opacity-30 hover:opacity-90 transition ${critical ? "animate-btn-urgent" : ""}`}
                 >
                   {myTurn ? "Spin for team" : turnIsBot ? "CPU spinning…" : "Waiting…"}
                 </button>
@@ -475,7 +477,7 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
                 <button
                   onClick={() => spinEra(getPlayerId())}
                   disabled={!myTurn || turnIsBot}
-                  className="px-7 py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase disabled:opacity-30 hover:opacity-90 transition"
+                  className={`px-7 py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase disabled:opacity-30 hover:opacity-90 transition ${critical ? "animate-btn-urgent" : ""}`}
                 >
                   {myTurn ? "Spin for era" : turnIsBot ? "CPU spinning…" : "Waiting…"}
                 </button>
@@ -499,15 +501,26 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
           </div>
           {myTurn && !turnIsBot ? (() => {
             const takenKeys = new Set(seats.flatMap((s) => seatTeam(room, s)).map((p) => `${p.name}|${p.team}|${p.era}`));
+            const urgent = remaining <= 10;
+            const critical = remaining <= 5;
             return (
-              <PlayerPicker
-                players={getPlayersFor(room.spinResult.era as Era, room.spinResult.team)}
-                takenKeys={takenKeys}
-                canPick={true}
-                team={room.spinResult.team}
-                openSlots={myOpenSlots}
-                onPick={(name, position) => pickPlayer(getPlayerId(), name, position as Position)}
-              />
+              <div className={`rounded-xl border border-transparent transition-all ${critical ? "timer-critical" : urgent ? "timer-urgent" : ""}`}>
+                {critical && (
+                  <div className="text-center pb-3 pt-1">
+                    <span className="text-xs font-medium text-destructive tracking-wide animate-pulse">
+                      Auto-picking in {remaining}s…
+                    </span>
+                  </div>
+                )}
+                <PlayerPicker
+                  players={getPlayersFor(room.spinResult.era as Era, room.spinResult.team)}
+                  takenKeys={takenKeys}
+                  canPick={true}
+                  team={room.spinResult.team}
+                  openSlots={myOpenSlots}
+                  onPick={(name, position) => pickPlayer(getPlayerId(), name, position as Position)}
+                />
+              </div>
             );
           })() : (
             <div className="text-center py-6">
