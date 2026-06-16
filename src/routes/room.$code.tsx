@@ -357,31 +357,37 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
 
   const lastActedKey = useRef<string>("");
   const iAmHost = me === 1;
+
+  // Bot autoPlay — no `remaining` dep so the timer isn't canceled every second.
   useEffect(() => {
-    if (spinning) return;
-    if (room.phase !== "draft") return;
-    // Only host drives bots / timeouts to avoid duplicate broadcasts.
-    if (!iAmHost) return;
+    if (spinning || room.phase !== "draft" || !iAmHost || !turnIsBot) return;
     const key = `${room.currentTurn}-${totalPicks}-${room.spinResult?.ts ?? 0}`;
     if (lastActedKey.current === key) return;
     const step: "spin" | "pick" = (!room.spinResult || room.spinResult.era == null) ? "spin" : "pick";
-
-    let delay: number;
-    if (turnIsBot) {
-      delay = step === "spin" ? 800 + Math.random() * 600 : 2500 + Math.random() * 5000;
-    } else {
-      const start = new Date(room.turnStartedAt).getTime();
-      const remainMs = TURN_SECONDS * 1000 - (Date.now() - start);
-      // If time is already up (remainMs <= 0), fire immediately (250ms buffer).
-      delay = Math.max(0, remainMs) + 250;
-    }
-
+    const delay = step === "spin" ? 800 + Math.random() * 600 : 2500 + Math.random() * 5000;
     const t = setTimeout(() => {
       lastActedKey.current = key;
       autoPlay(step);
     }, delay);
     return () => clearTimeout(t);
-  }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, room.turnStartedAt, iAmHost, remaining]);
+  }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, iAmHost]);
+
+  // Human timeout — re-checks on every `remaining` tick so 0-second turns fire immediately.
+  useEffect(() => {
+    if (spinning || room.phase !== "draft" || !iAmHost || turnIsBot) return;
+    const key = `${room.currentTurn}-${totalPicks}-${room.spinResult?.ts ?? 0}`;
+    if (lastActedKey.current === key) return;
+    const step: "spin" | "pick" = (!room.spinResult || room.spinResult.era == null) ? "spin" : "pick";
+    const start = new Date(room.turnStartedAt).getTime();
+    const remainMs = TURN_SECONDS * 1000 - (Date.now() - start);
+    // If time is already up (remainMs <= 0), fire immediately (250ms buffer).
+    const delay = Math.max(0, remainMs) + 250;
+    const t = setTimeout(() => {
+      lastActedKey.current = key;
+      autoPlay(step);
+    }, delay);
+    return () => clearTimeout(t);
+  }, [turnIsBot, spinning, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, iAmHost, remaining]);
 
   const gridCols = seats.length === 2 ? "grid-cols-1 sm:grid-cols-2"
     : seats.length === 3 ? "grid-cols-1 sm:grid-cols-3"
