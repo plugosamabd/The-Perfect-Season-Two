@@ -10,9 +10,59 @@ interface Props {
 }
 
 function buildShareText(room: GameRoom, winnerSeat: Seat | 0): string {
+  const isTvt = (room.gameMode ?? "classic") === "tvt";
   const winnerName =
     winnerSeat > 0 ? room.players.find((p) => p.seat === winnerSeat)?.name ?? "Winner" : "Tie";
   const seats = room.players.map((p) => p.seat).sort((a, b) => a - b);
+  const seatName = (s: Seat) => room.players.find((p) => p.seat === s)?.name ?? `P${s}`;
+
+  if (isTvt) {
+    const matchups = room.tvtMatchups ?? [];
+    const sorted = [...seats].sort(
+      (a, b) => (room.records[b]?.wins ?? 0) - (room.records[a]?.wins ?? 0)
+    );
+    const tb = room.tiebreaker;
+    const finalists = (room.tiebreakerPlayers ?? []) as Seat[];
+
+    const bracketLines = matchups.map((m) => {
+      const wName = seatName(m.winner as Seat);
+      const loser = m.winner === m.seatA ? m.seatB : m.seatA;
+      return `  ${wName} def. ${seatName(loser as Seat)}`;
+    });
+
+    const standingsLines = sorted.map((s, rank) => {
+      const r = room.records[s] ?? { wins: 0, losses: 0 };
+      const star = s === winnerSeat ? " 🏆" : "";
+      return `  ${rank + 1}. ${seatName(s as Seat)}${star} — ${r.wins}-${r.losses}`;
+    });
+
+    const tbLines: string[] = [];
+    if (tb && finalists.length === 2) {
+      const [sA, sB] = finalists;
+      tbLines.push(`  ${seatName(sA)} ${tb.scores[String(sA)] ?? 0} – ${tb.scores[String(sB)] ?? 0} ${seatName(sB)}`);
+      tb.history.forEach((h) => {
+        const defSeat = finalists.find((s) => s !== h.offense) as Seat;
+        const offMove = h.moves[String(h.offense)] ?? "?";
+        const defMove = h.moves[String(defSeat)] ?? "?";
+        const scorerName = seatName(h.roundWinner as Seat);
+        tbLines.push(`  R${h.round}: ${seatName(h.offense as Seat)} ${offMove} vs ${seatName(defSeat)} ${defMove} → ${scorerName} scores`);
+      });
+    }
+
+    return [
+      `Team vs Team — ${winnerSeat > 0 ? `${winnerName} wins` : "Tie game"}`,
+      "",
+      "Round-robin:",
+      ...bracketLines,
+      "",
+      "Standings:",
+      ...standingsLines,
+      "",
+      ...(tbLines.length ? ["1-on-1 final:", ...tbLines, ""] : []),
+      "Spin. Draft. Sim. Build the better team.",
+    ].join("\n");
+  }
+
   const lines = seats.map((s) => {
     const name = room.players.find((p) => p.seat === s)?.name ?? `P${s}`;
     const rec = room.records[s] ?? { wins: 0, losses: 82 };

@@ -802,19 +802,23 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: "eme
 /* ---------------- RESULT ---------------- */
 
 function Result({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const isTvt = (room.gameMode ?? "classic") === "tvt";
   const winner = room.winner ?? 0;
   const tie = winner === 0;
   const youWin = winner === me && me !== 0;
-  const winnerName = winner > 0 ? seatName(room, winner as SeatN) : null;
-  const seats = activeSeats(room);
-  const cols = seats.length === 2 ? "grid-cols-1 sm:grid-cols-2"
-    : seats.length === 3 ? "grid-cols-1 sm:grid-cols-3"
-    : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4";
 
   useEffect(() => {
     if (youWin) sfx.fanfare();
     else if (!tie) sfx.buzzer();
   }, [youWin, tie]);
+
+  if (isTvt) return <TvtRecap room={room} me={me} winner={winner as SeatN | 0} youWin={youWin} />;
+
+  const winnerName = winner > 0 ? seatName(room, winner as SeatN) : null;
+  const seats = activeSeats(room);
+  const cols = seats.length === 2 ? "grid-cols-1 sm:grid-cols-2"
+    : seats.length === 3 ? "grid-cols-1 sm:grid-cols-3"
+    : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4";
 
   return (
     <div className="py-10 text-center max-w-5xl mx-auto">
@@ -824,18 +828,195 @@ function Result({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
       </h2>
       <div className={`mt-8 grid ${cols} gap-3`}>
         {seats.map((s) => (
-          <FinalCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} roster={seatTeam(room, s)} winner={s === winner} isTvt={(room.gameMode ?? "classic") === "tvt"} />
+          <FinalCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} roster={seatTeam(room, s)} winner={s === winner} />
         ))}
       </div>
-
       <ShareResult room={room} winnerSeat={winner as SeatN | 0} youWin={youWin} />
-
       <button
         onClick={() => roomManager.resetRoom()}
         className="mt-6 px-6 py-2.5 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase hover:opacity-90"
       >
         Rematch
       </button>
+    </div>
+  );
+}
+
+/* ---------------- TVT RECAP ---------------- */
+
+function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0; winner: SeatN | 0; youWin: boolean }) {
+  const tb = room.tiebreaker;
+  const matchups = room.tvtMatchups ?? [];
+  const seats = activeSeats(room);
+  const sorted = [...seats].sort((a, b) => (seatRecord(room, b)?.wins ?? 0) - (seatRecord(room, a)?.wins ?? 0));
+  const winnerName = winner > 0 ? seatName(room, winner as SeatN) : null;
+  const tie = winner === 0;
+  const finalists = (room.tiebreakerPlayers ?? []) as SeatN[];
+
+  // Tiebreaker score tally per seat
+  const tbScores = tb ? { ...tb.scores } : {} as Record<string, number>;
+
+  return (
+    <div className="py-10 max-w-5xl mx-auto">
+      {/* Winner banner */}
+      <div className="text-center mb-10">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Team vs Team · Final</div>
+        <h2 className={`font-display text-4xl sm:text-5xl mt-2 ${youWin ? "text-emerald-300" : "text-foreground"}`}>
+          {tie ? "Tie" : `${winnerName} wins`}
+        </h2>
+        {tb && winner > 0 && (
+          <div className="text-sm text-muted-foreground mt-2">
+            1-on-1 final: {tbScores[String(finalists[0])] ?? 0}–{tbScores[String(finalists[1])] ?? 0}
+          </div>
+        )}
+      </div>
+
+      {/* Two-column layout: bracket left, tiebreaker right */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+
+        {/* ── Round-robin bracket ── */}
+        <div className="bg-card border border-border rounded-2xl p-5">
+          <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-4">Round-robin results</div>
+          <div className="space-y-2">
+            {matchups.map((m, i) => {
+              const winnerIsA = m.winner === m.seatA;
+              const nameA = seatName(room, m.seatA as SeatN) ?? `P${m.seatA}`;
+              const nameB = seatName(room, m.seatB as SeatN) ?? `P${m.seatB}`;
+              return (
+                <div key={i} className="flex items-center gap-2 text-sm">
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatA]}`} />
+                  <span className={`flex-1 truncate ${winnerIsA ? SEAT_TEXT[m.seatA] + " font-medium" : "text-muted-foreground"}`}>{nameA}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono px-1">def.</span>
+                  <span className={`flex-1 truncate text-right ${!winnerIsA ? SEAT_TEXT[m.seatB] + " font-medium" : "text-muted-foreground"}`}>{nameB}</span>
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatB]}`} />
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Standings */}
+          <div className="mt-5 pt-4 border-t border-border">
+            <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-3">Final standings</div>
+            <div className="space-y-2">
+              {sorted.map((s, rank) => {
+                const r = seatRecord(room, s as SeatN) ?? { wins: 0, losses: 0 };
+                const isWinner = s === winner;
+                const isFinalist = finalists.includes(s as SeatN);
+                return (
+                  <div key={s} className={`flex items-center gap-3 rounded-lg px-3 py-2 ${isWinner ? "bg-foreground/5 ring-1 " + SEAT_RING[s] : "bg-background/40"}`}>
+                    <span className="text-xs text-muted-foreground w-3">{rank + 1}</span>
+                    <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[s]}`} />
+                    <span className={`flex-1 text-sm font-medium truncate ${isWinner ? SEAT_TEXT[s] : ""}`}>{seatName(room, s as SeatN)}</span>
+                    <span className="font-mono text-sm">{r.wins}-{r.losses}</span>
+                    {isWinner && <span className="text-xs">🏆</span>}
+                    {!isWinner && isFinalist && <span className="text-[10px] text-muted-foreground uppercase tracking-widest">Final</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Tiebreaker history ── */}
+        <div className="bg-card border border-border rounded-2xl p-5">
+          <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-1">1-on-1 final</div>
+          {tb && finalists.length === 2 ? (() => {
+            const [sA, sB] = finalists;
+            const nameA = seatName(room, sA) ?? `P${sA}`;
+            const nameB = seatName(room, sB) ?? `P${sB}`;
+            return (
+              <>
+                {/* Score header */}
+                <div className="flex items-center gap-3 mb-4 mt-2">
+                  <div className={`flex-1 text-center rounded-lg py-2 bg-background/40 ${tb.scores[String(sA)] > tb.scores[String(sB)] ? "ring-1 " + SEAT_RING[sA] : ""}`}>
+                    <div className={`text-xs truncate px-1 ${SEAT_TEXT[sA]}`}>{nameA}</div>
+                    <div className="font-display text-3xl">{tbScores[String(sA)] ?? 0}</div>
+                  </div>
+                  <div className="text-muted-foreground text-sm">–</div>
+                  <div className={`flex-1 text-center rounded-lg py-2 bg-background/40 ${tb.scores[String(sB)] > tb.scores[String(sA)] ? "ring-1 " + SEAT_RING[sB] : ""}`}>
+                    <div className={`text-xs truncate px-1 ${SEAT_TEXT[sB]}`}>{nameB}</div>
+                    <div className="font-display text-3xl">{tbScores[String(sB)] ?? 0}</div>
+                  </div>
+                </div>
+
+                {/* Round-by-round history */}
+                <div className="space-y-1.5">
+                  {tb.history.map((h, i) => {
+                    const offName = seatName(room, h.offense as SeatN) ?? `P${h.offense}`;
+                    const defSeat = finalists.find((s) => s !== h.offense) as SeatN;
+                    const defName = seatName(room, defSeat) ?? `P${defSeat}`;
+                    const offMove = h.moves[String(h.offense)] ?? "?";
+                    const defMove = h.moves[String(defSeat)] ?? "?";
+                    const scored = h.roundWinner === h.offense;
+                    return (
+                      <div key={i} className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 bg-background/40">
+                        <span className="text-muted-foreground font-mono w-4 flex-shrink-0">R{h.round}</span>
+                        <span className={`flex-1 truncate ${SEAT_TEXT[h.offense as SeatN]}`}>
+                          {offName} <span className="text-muted-foreground font-normal">→</span> <span className="font-medium">{offMove}</span>
+                        </span>
+                        <span className="text-muted-foreground">vs</span>
+                        <span className={`flex-1 truncate text-right ${SEAT_TEXT[defSeat]}`}>
+                          <span className="font-medium">{defMove}</span> <span className="text-muted-foreground font-normal">←</span> {defName}
+                        </span>
+                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[h.roundWinner as SeatN]}`} title={scored ? `${offName} scores` : `${defName} scores`} />
+                      </div>
+                    );
+                  })}
+                  {tb.history.length === 0 && (
+                    <div className="text-sm text-muted-foreground text-center py-4">No rounds played yet.</div>
+                  )}
+                </div>
+
+                {/* Avatar showdown */}
+                {tb.avatars && (
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-2">Isolation players</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {finalists.map((s) => {
+                        const av = tb.avatars[String(s)];
+                        return (
+                          <div key={s} className={`rounded-lg px-3 py-2 bg-background/40 ${s === winner ? "ring-1 " + SEAT_RING[s] : ""}`}>
+                            <div className={`text-[10px] truncate ${SEAT_TEXT[s]}`}>{seatName(room, s)}</div>
+                            <div className="font-display text-base mt-0.5 truncate">{av?.name ?? "—"}</div>
+                            {av && <div className="text-[10px] text-muted-foreground">{av.era}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })() : (
+            <div className="text-sm text-muted-foreground py-8 text-center">No tiebreaker data.</div>
+          )}
+        </div>
+      </div>
+
+      {/* FinalCards row */}
+      {(() => {
+        const cols = seats.length === 2 ? "grid-cols-1 sm:grid-cols-2"
+          : seats.length === 3 ? "grid-cols-1 sm:grid-cols-3"
+          : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4";
+        return (
+          <div className={`grid ${cols} gap-3 mb-6`}>
+            {seats.map((s) => (
+              <FinalCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} roster={seatTeam(room, s)} winner={s === winner} isTvt />
+            ))}
+          </div>
+        );
+      })()}
+
+      <ShareResult room={room} winnerSeat={winner as SeatN | 0} youWin={youWin} />
+
+      <div className="text-center mt-6">
+        <button
+          onClick={() => roomManager.resetRoom()}
+          className="px-6 py-2.5 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase hover:opacity-90"
+        >
+          Rematch
+        </button>
+      </div>
     </div>
   );
 }
