@@ -22,7 +22,7 @@ import {
   type Seat,
   type SpinResult,
 } from "@/lib/game";
-import { useP2PStore, gameSync, type GameRoom, type TiebreakerState } from "@/lib/p2p";
+import { useP2PStore, gameSync, type GameRoom, type TiebreakerState, type FinalsOffenseMove, type FinalsDefenseMove } from "@/lib/p2p";
 
 function nowIso() { return new Date().toISOString(); }
 function seatOf(room: GameRoom, playerId: string): Seat | null {
