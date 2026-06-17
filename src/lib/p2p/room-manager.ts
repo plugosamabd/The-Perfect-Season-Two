@@ -7,6 +7,9 @@ import { ALL_SEATS, type Seat, genRoomCode } from "@/lib/game";
 const SNAP_PREFIX = "lovable-room-snap-";
 const SNAP_TTL_MS = 3 * 60 * 1000;
 
+const log = (...args: unknown[]) => console.log("[RoomManager]", ...args);
+const warn = (...args: unknown[]) => console.warn("[RoomManager]", ...args);
+
 export function saveRoomSnapshot(room: GameRoom) {
   if (typeof localStorage === "undefined") return;
   try {
@@ -83,28 +86,47 @@ function emptyRoom(code: string, hostId: string, hostName: string, maxPlayers: n
 export const roomManager = {
   async hostNewRoom(hostId: string, hostName: string, maxPlayers: number, respinsTotal = 0, gameMode: GameMode = "classic"): Promise<GameRoom> {
     const code = genRoomCode();
+    log(`hostNewRoom — code="${code}" maxPlayers=${maxPlayers} gameMode="${gameMode}"`);
     await peerManager.initHost(code);
     gameSync.init();
     const room = emptyRoom(code, hostId, hostName, maxPlayers, respinsTotal, gameMode);
     useP2PStore.setState({ room, messages: [] });
     saveRoomSnapshot(room);
+    log(`hostNewRoom — ready, peer ID = "${peerManager.selfId}"`);
     return room;
   },
 
-  async joinExistingRoom(code: string, playerId: string, playerName: string): Promise<void> {
+  async joinExistingRoom(
+    code: string,
+    playerId: string,
+    playerName: string,
+    onStatus?: (msg: string) => void,
+  ): Promise<void> {
     const MAX_ATTEMPTS = 3;
     let lastErr: Error = new Error("Could not connect to room");
+    const status = (msg: string) => { log(msg); onStatus?.(msg); };
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
+        status(
+          attempt === 1
+            ? "Connecting…"
+            : `Retrying… (attempt ${attempt}/${MAX_ATTEMPTS})`,
+        );
+        log(`joinExistingRoom — attempt ${attempt}/${MAX_ATTEMPTS} for room "${code}"`);
+
         // Each attempt gets a fresh peer + fresh handlers (destroy clears listeners).
         await peerManager.initJoiner();
         gameSync.init();
+
+        status(attempt === 1 ? "Connecting… reaching host" : `Retrying… reaching host (${attempt}/${MAX_ATTEMPTS})`);
         await peerManager.connectToHost(code);
+        log(`joinExistingRoom — DataChannel open on attempt ${attempt}`);
 
         // Brief stabilisation pause, then fire both hello (explicit handshake)
         // and request-sync so the host has two separate prompts to reply.
         await new Promise((r) => setTimeout(r, 300));
+        status("Connected — waiting for room data…");
         peerManager.broadcast("hello", null);
         gameSync.requestSync();
 
@@ -116,17 +138,25 @@ export const roomManager = {
           if (room) break;
           // Re-ping the host every 2 s to cover dropped messages.
           if (i > 0 && i % 4 === 0) {
+            log(`joinExistingRoom — no room after ${(i + 1) * 0.5}s, re-pinging host`);
             peerManager.broadcast("hello", null);
             gameSync.requestSync();
           }
         }
 
-        if (!room) throw new Error("Host did not respond — room may not exist");
+        if (!room) {
+          log(`joinExistingRoom — attempt ${attempt} timed out (no room state received)`);
+          throw new Error("Host did not respond — room may not exist");
+        }
+
+        log(`joinExistingRoom — room received on attempt ${attempt}, phase="${room.phase}" players=${room.players.length}`);
 
         const alreadyInRoom = room.players.some((p) => p.id === playerId);
+        log(`joinExistingRoom — alreadyInRoom=${alreadyInRoom}`);
 
         if (alreadyInRoom) {
           // Player refreshed mid-game — restore local state from host.
+          log("joinExistingRoom — reconnecting existing player, restoring state");
           useP2PStore.setState({ room });
           return;
         }
@@ -142,16 +172,19 @@ export const roomManager = {
           if (!used.has(s) && s <= room.maxPlayers) { seat = s; break; }
         }
         if (!seat) throw new Error("Room is full");
+        log(`joinExistingRoom — assigning seat ${seat} to "${playerName}"`);
         const updated: GameRoom = {
           ...room,
           players: [...room.players, { id: playerId, name: playerName, seat }],
           updatedAt: new Date().toISOString(),
         };
         gameSync.syncRoom(updated);
-        return; // success
+        log("joinExistingRoom — success");
+        return;
 
-      } catch (err) {
-        lastErr = err instanceof Error ? err : new Error(String(err));
+      } catch (e) {
+        lastErr = e instanceof Error ? e : new Error(String(e));
+        warn(`joinExistingRoom — attempt ${attempt} failed: ${lastErr.message}`);
 
         // Don't retry for definitive, non-connection errors.
         if (
@@ -162,18 +195,20 @@ export const roomManager = {
         }
 
         if (attempt < MAX_ATTEMPTS) {
-          // Short pause before retrying so the PeerJS signalling server
-          // has a moment to clear any stale state from the previous attempt.
+          status(`Connection failed — retrying in 2s… (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+          // Short pause so the PeerJS broker can clear stale state from the previous attempt.
           await new Promise((r) => setTimeout(r, 2_000));
         }
       }
     }
 
+    warn(`joinExistingRoom — all ${MAX_ATTEMPTS} attempts exhausted`);
     throw lastErr;
   },
 
   async hostSoloRoom(hostId: string, hostName: string, bots: number, respinsTotal = 0, gameMode: GameMode = "classic"): Promise<GameRoom> {
     const code = genRoomCode();
+    log(`hostSoloRoom — code="${code}" bots=${bots}`);
     await peerManager.initHost(code).catch(() => { /* peer optional for solo */ });
     gameSync.init();
     const maxPlayers = bots + 1;
@@ -194,8 +229,9 @@ export const roomManager = {
   },
 
   async resumeRoom(code: string): Promise<GameRoom | null> {
+    log(`resumeRoom — code="${code}"`);
     const snap = loadRoomSnapshot(code);
-    if (!snap) return null;
+    if (!snap) { warn("resumeRoom — no snapshot found"); return null; }
     await peerManager.initHost(code).catch(() => { /* */ });
     gameSync.init();
     const resumed: GameRoom = {
@@ -204,12 +240,14 @@ export const roomManager = {
       updatedAt: new Date().toISOString(),
     };
     useP2PStore.setState({ room: resumed, messages: [] });
+    log(`resumeRoom — restored phase="${resumed.phase}"`);
     return resumed;
   },
 
   resetRoom() {
     const room = useP2PStore.getState().room;
     if (!room) return;
+    log(`resetRoom — room "${room.code}"`);
     const teams: Record<number, never[]> = {};
     const records: Record<number, null> = {};
     const respinsUsed: Record<number, number> = {};
@@ -236,6 +274,7 @@ export const roomManager = {
     const room = useP2PStore.getState().room;
     if (!room || room.hostId !== hostId || room.phase !== "lobby") return;
     if (room.players.length < 2) return;
+    log(`startGame — room "${room.code}" with ${room.players.length} players`);
     const updated: GameRoom = {
       ...room,
       phase: "draft",
@@ -247,11 +286,11 @@ export const roomManager = {
     // the draft started still receive the phase change.
     setTimeout(() => {
       const cur = useP2PStore.getState().room;
-      if (cur && cur.phase === "draft") gameSync.syncRoom(cur);
+      if (cur && cur.phase === "draft") { log("startGame — re-broadcast at 1s"); gameSync.syncRoom(cur); }
     }, 1_000);
     setTimeout(() => {
       const cur = useP2PStore.getState().room;
-      if (cur && cur.phase === "draft") gameSync.syncRoom(cur);
+      if (cur && cur.phase === "draft") { log("startGame — re-broadcast at 3s"); gameSync.syncRoom(cur); }
     }, 3_000);
   },
 
@@ -264,6 +303,7 @@ export const roomManager = {
       if (!used.has(s) && s <= room.maxPlayers) { seat = s; break; }
     }
     if (!seat) return;
+    log(`addBot — seat ${seat}`);
     const updated: GameRoom = {
       ...room,
       players: [...room.players, {
@@ -281,6 +321,7 @@ export const roomManager = {
     if (room && typeof localStorage !== "undefined") {
       try { localStorage.removeItem(SNAP_PREFIX + room.code); } catch { /* */ }
     }
+    log("leaveRoom — destroying peer");
     await peerManager.destroy();
     useP2PStore.setState({ room: null, messages: [], connected: false });
   },
