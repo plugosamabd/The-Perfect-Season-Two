@@ -2,10 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getPlayerId, getPlayerName, setPlayerName } from "@/lib/identity";
 import { ERA_BOOST, erasForTeam, getPlayersFor, teamColor, TEAMS_WITH_ROSTER, type Era, type Player, type Position } from "@/data/roster";
-import { POSITIONS, TURN_SECONDS, type DraftedPlayer, type Seat } from "@/lib/game";
+import { POSITIONS, TURN_SECONDS, getShotsForPlayer, DEFENSE_TYPES, type DraftedPlayer, type Seat } from "@/lib/game";
 import { useP2PStore, roomManager, type GameRoom, type TvtMatchup } from "@/lib/p2p";
 import { loadRoomSnapshot } from "@/lib/p2p/room-manager";
-import { spin, spinEra, pickPlayer, runSim, pickAvatar, submitMove, autoPlay, respin } from "@/lib/game.actions";
+import { spin, spinEra, pickPlayer, runSim, pickFinalistPlayer, submitOffenseMove, submitDefenseMove, autoPlay, respin } from "@/lib/game.actions";
 import { ChatBox } from "@/components/ChatBox";
 import { SpinWheel, teamSlices, eraSlices } from "@/components/SpinWheel";
 import { PlayerPicker } from "@/components/PlayerPicker";
@@ -70,8 +70,6 @@ function RoomPage() {
 
   useEffect(() => { setPid(getPlayerId()); setMyName(getPlayerName()); }, []);
 
-  // Host-only resume: if landing here cold (refresh/relaunch), try to hydrate
-  // from the local snapshot when we were the host.
   useEffect(() => {
     if (resumeTried || !pid) return;
     if (room && room.code === code) return;
@@ -90,8 +88,6 @@ function RoomPage() {
     return 0;
   }, [room, pid]);
 
-  // While we're still trying to resume/hydrate, show a neutral loading state
-  // instead of the 404 screen so the game doesn't get destroyed mid-reconnect.
   if (!room || room.code !== code) {
     if (!resumeTried) {
       return (
@@ -153,8 +149,8 @@ function RoomPage() {
         {room.phase === "draft" && <Draft room={room} me={realSeat} />}
         {room.phase === "sim" && <Sim room={room} me={realSeat} />}
         {room.phase === "result" && <ResultReveal room={room} me={realSeat} />}
-        {room.phase === "tiebreaker_pick" && <TiebreakerPick room={room} me={realSeat} />}
-        {room.phase === "tiebreaker" && <Tiebreaker room={room} me={realSeat} />}
+        {room.phase === "tiebreaker_pick" && <FinalsPick room={room} me={realSeat} />}
+        {room.phase === "tiebreaker" && <Finals room={room} me={realSeat} />}
         {realSeat === 0 && (
           <div className="text-center text-xs text-muted-foreground mt-4">Spectating</div>
         )}
@@ -207,7 +203,13 @@ function JoinFromLink({ code }: { code: string }) {
               placeholder="alex"
             />
           </div>
-          {err && <div className="text-destructive text-xs">{err}</div>}
+          {err && (
+            <div className={`text-xs px-3 py-2 rounded-md ${err.includes("already started") ? "bg-destructive/10 border border-destructive/30 text-destructive" : "text-destructive"}`}>
+              {err.includes("already started") ? (
+                <span>⚠️ {err}</span>
+              ) : err}
+            </div>
+          )}
           <button
             type="submit"
             disabled={busy}
@@ -281,8 +283,6 @@ function RespinControl({ canRespin, respinsLeft }: { canRespin: boolean; respins
   );
 }
 
-
-
 /* ---------------- LOBBY ---------------- */
 
 function Lobby({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
@@ -350,10 +350,10 @@ function PlayerCard({ seat, name, ready }: { seat: SeatN; name: string | null; r
   return (
     <div className={`px-3.5 py-3 rounded-lg border bg-card text-left ${ready ? "border-border" : "border-dashed border-border opacity-50"}`}>
       <div className="flex items-center gap-2">
-        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[seat]}`} />
         <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">P{seat}</div>
       </div>
-      <div className="font-medium text-sm mt-1 truncate">{name ?? "Waiting…"}</div>
+      <div className="font-medium text-sm mt-1 truncate min-w-0">{name ?? "Waiting…"}</div>
     </div>
   );
 }
@@ -401,8 +401,6 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   const lastActedKey = useRef<string>("");
   const iAmHost = me === 1;
 
-  // Bot autoPlay — no `spinning` dep (spin animations play in background);
-  // lastActedKey prevents double-firing; fires in ~1-4 seconds total per pick.
   useEffect(() => {
     if (room.phase !== "draft" || !iAmHost || !turnIsBot) return;
     const key = `${room.currentTurn}-${totalPicks}-${room.spinResult?.ts ?? 0}`;
@@ -416,7 +414,6 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     return () => clearTimeout(t);
   }, [turnIsBot, room.phase, room.currentTurn, room.spinResult?.ts, totalPicks, iAmHost]);
 
-  // Human timeout — re-checks on every `remaining` tick so 0-second turns fire immediately.
   useEffect(() => {
     if (spinning || room.phase !== "draft" || !iAmHost || turnIsBot) return;
     const key = `${room.currentTurn}-${totalPicks}-${room.spinResult?.ts ?? 0}`;
@@ -424,7 +421,6 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     const step: "spin" | "pick" = (!room.spinResult || room.spinResult.era == null) ? "spin" : "pick";
     const start = new Date(room.turnStartedAt).getTime();
     const remainMs = TURN_SECONDS * 1000 - (Date.now() - start);
-    // If time is already up (remainMs <= 0), fire immediately (250ms buffer).
     const delay = Math.max(0, remainMs) + 250;
     const t = setTimeout(() => {
       lastActedKey.current = key;
@@ -450,11 +446,11 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
 
       <div className="text-center mb-5">
         <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Round {round} of 5</div>
-        <div className="text-base sm:text-lg mt-1">
+        <div className="text-base sm:text-lg mt-1 flex items-center justify-center gap-1.5 flex-wrap">
           <span className={`font-medium ${SEAT_TEXT[turnSeat]}`}>{turnName}</span>
-          <span className="text-muted-foreground"> · </span>
+          <span className="text-muted-foreground">·</span>
           <span className="text-foreground/80">on the clock</span>
-          {turnIsBot && <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground ml-2">CPU</span>}
+          {turnIsBot && <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground ml-1">CPU</span>}
         </div>
         <TurnTimer remaining={remaining} />
       </div>
@@ -462,7 +458,6 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
       <div className="py-4 sm:py-6">
         {(() => {
           const sr = room.spinResult;
-          // PHASE 1 — team wheel (also the resting state when nothing has been spun)
           if (!sr || sr.era == null) {
             const teams = TEAMS_WITH_ROSTER;
             const slices = teamSlices(teams);
@@ -477,7 +472,6 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
               />
             );
           }
-          // PHASE 2 — era wheel for the locked-in team
           const eras = erasForTeam(sr.team);
           const c = teamColor(sr.team);
           const slices = eraSlices(eras, c.primary, c.accent);
@@ -493,7 +487,6 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
           );
         })()}
 
-        {/* Action buttons */}
         {!spinning && (() => {
           const sr = room.spinResult;
           const urgent = myTurn && !turnIsBot && remaining <= 10;
@@ -556,10 +549,10 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
                   </div>
                 )}
                 <PlayerPicker
-                  players={getPlayersFor(room.spinResult.era as Era, room.spinResult.team)}
+                  players={getPlayersFor(room.spinResult!.era as Era, room.spinResult!.team)}
                   takenKeys={takenKeys}
                   canPick={true}
-                  team={room.spinResult.team}
+                  team={room.spinResult!.team}
                   openSlots={myOpenSlots}
                   onPick={(name, position) => pickPlayer(getPlayerId(), name, position as Position)}
                 />
@@ -576,7 +569,6 @@ function Draft({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
           )}
         </div>
       )}
-
     </div>
   );
 }
@@ -599,20 +591,20 @@ function TurnTimer({ remaining }: { remaining: number }) {
 function TeamPanel({ seat, name, roster, active }: { seat: SeatN; name: string | null; roster: DraftedPlayer[]; active?: boolean }) {
   return (
     <div className={`bg-card border rounded-xl p-3 ${active ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-90"}`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
-          <div className="text-sm font-medium truncate">{name ?? `Player ${seat}`}</div>
+      <div className="flex items-center justify-between mb-2 gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[seat]}`} />
+          <div className="text-sm font-medium truncate min-w-0 break-words">{name ?? `Player ${seat}`}</div>
         </div>
-        <div className="text-[10px] text-muted-foreground">{roster.length}/5</div>
+        <div className="text-[10px] text-muted-foreground flex-shrink-0">{roster.length}/5</div>
       </div>
       <div className="space-y-1">
         {POSITIONS.map((pos) => {
           const p = roster.find((r) => r.slot === pos);
           return (
             <div key={pos} className={`px-2 py-1.5 rounded text-xs flex items-center gap-2 ${p ? "bg-background" : "bg-background/40 border border-dashed border-border"}`}>
-              <span className="font-mono font-medium text-[10px] w-6 text-muted-foreground">{pos}</span>
-              {p ? <span className="truncate flex-1">{p.name}</span> : <span className="text-muted-foreground flex-1">empty</span>}
+              <span className="font-mono font-medium text-[10px] w-6 flex-shrink-0 text-muted-foreground">{pos}</span>
+              {p ? <span className="truncate flex-1 min-w-0">{p.name}</span> : <span className="text-muted-foreground flex-1">empty</span>}
             </div>
           );
         })}
@@ -658,10 +650,8 @@ function Sim({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   );
 }
 
-// Live bracket reveal shown after TVT sim completes (during tiebreaker_pick phase).
 function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   const matchups = room.tvtMatchups ?? [];
-  // Reveal matchups one at a time, 800ms apart.
   const [revealed, setRevealed] = useState(0);
   useEffect(() => {
     if (revealed >= matchups.length) return;
@@ -680,7 +670,6 @@ function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
         <h2 className="font-display text-3xl sm:text-4xl mt-2">Results</h2>
       </div>
 
-      {/* Matchup cards */}
       <div className="space-y-3 mb-8">
         {matchups.map((m, i) => {
           const visible = i < revealed;
@@ -691,25 +680,23 @@ function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
             <div
               key={i}
               className={`bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3 transition-all duration-500 ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"}`}
-              style={{ transitionDelay: "0ms" }}
             >
-              <div className={`flex-1 flex items-center gap-2 ${winnerIsA ? "" : "opacity-40"}`}>
+              <div className={`flex-1 flex items-center gap-2 min-w-0 ${winnerIsA ? "" : "opacity-40"}`}>
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatA]}`} />
-                <span className={`text-sm font-medium truncate ${winnerIsA ? SEAT_TEXT[m.seatA] : ""}`}>{nameA}</span>
-                {winnerIsA && visible && <span className="ml-auto text-[10px] uppercase tracking-widest text-muted-foreground">W</span>}
+                <span className={`text-sm font-medium truncate min-w-0 ${winnerIsA ? SEAT_TEXT[m.seatA] : ""}`}>{nameA}</span>
+                {winnerIsA && visible && <span className="ml-auto text-[10px] uppercase tracking-widest text-muted-foreground flex-shrink-0">W</span>}
               </div>
               <div className="text-xs text-muted-foreground font-mono px-2 flex-shrink-0">vs</div>
-              <div className={`flex-1 flex items-center gap-2 flex-row-reverse ${!winnerIsA ? "" : "opacity-40"}`}>
+              <div className={`flex-1 flex items-center gap-2 flex-row-reverse min-w-0 ${!winnerIsA ? "" : "opacity-40"}`}>
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatB]}`} />
-                <span className={`text-sm font-medium truncate ${!winnerIsA ? SEAT_TEXT[m.seatB] : ""}`}>{nameB}</span>
-                {!winnerIsA && visible && <span className="mr-auto text-[10px] uppercase tracking-widest text-muted-foreground">W</span>}
+                <span className={`text-sm font-medium truncate min-w-0 ${!winnerIsA ? SEAT_TEXT[m.seatB] : ""}`}>{nameB}</span>
+                {!winnerIsA && visible && <span className="mr-auto text-[10px] uppercase tracking-widest text-muted-foreground flex-shrink-0">W</span>}
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Standings + finalists banner — only show after all matchups revealed */}
       {revealed >= matchups.length && (
         <div className="space-y-3">
           <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground text-center mb-2">Standings</div>
@@ -718,15 +705,15 @@ function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
             const isFinalist = finalists.includes(s as SeatN);
             return (
               <div key={s} className={`flex items-center gap-3 bg-card border rounded-xl px-4 py-3 ${isFinalist ? "border-foreground/40 ring-1 " + SEAT_RING[s] : "border-border opacity-70"}`}>
-                <span className="text-xs text-muted-foreground w-4 text-right">{rank + 1}</span>
-                <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[s]}`} />
-                <span className="flex-1 text-sm font-medium truncate">{seatName(room, s as SeatN)}</span>
-                <span className="font-mono text-sm">{r.wins}-{r.losses}</span>
-                {isFinalist && <span className="text-[10px] uppercase tracking-widest text-muted-foreground ml-1">Final</span>}
+                <span className="text-xs text-muted-foreground w-4 text-right flex-shrink-0">{rank + 1}</span>
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[s]}`} />
+                <span className="flex-1 text-sm font-medium truncate min-w-0">{seatName(room, s as SeatN)}</span>
+                <span className="font-mono text-sm flex-shrink-0">{r.wins}-{r.losses}</span>
+                {isFinalist && <span className="text-[10px] uppercase tracking-widest text-muted-foreground ml-1 flex-shrink-0">Finals</span>}
               </div>
             );
           })}
-          <div className="text-center mt-6 text-sm text-muted-foreground animate-pulse">Preparing 1-on-1 final…</div>
+          <div className="text-center mt-6 text-sm text-muted-foreground animate-pulse">Preparing 3v3 Finals…</div>
         </div>
       )}
     </div>
@@ -736,9 +723,9 @@ function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
 function MiniScoreCard({ seat, name, record, focused, isTvt }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; focused: boolean; isTvt?: boolean }) {
   return (
     <div className={`bg-card border rounded-xl p-4 ${focused ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-90"}`}>
-      <div className="flex items-center gap-2">
-        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
-        <div className="text-sm font-medium truncate">{name}</div>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[seat]}`} />
+        <div className="text-sm font-medium truncate min-w-0">{name}</div>
       </div>
       <div className="font-mono text-3xl sm:text-4xl text-foreground text-center mt-3">
         {record
@@ -756,8 +743,6 @@ function ResultReveal({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   const [done, setDone] = useState(false);
   useEffect(() => {
     setDone(false);
-    // In TVT mode, the result comes after the 1v1 tiebreaker, so skip the
-    // 82-game ticker animation and go straight to the result screen.
     const delay = isTvt ? 0 : 9000;
     const t = setTimeout(() => setDone(true), delay);
     return () => clearTimeout(t);
@@ -785,8 +770,6 @@ function FinalSim({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     return items;
   }, [finalRecord.wins, finalRecord.losses]);
   const [shown, setShown] = useState(0);
-  const winsShown = seq.slice(0, shown).filter((r) => r === "W").length;
-  const lossesShown = seq.slice(0, shown).filter((r) => r === "L").length;
 
   useEffect(() => {
     setShown(0);
@@ -806,12 +789,12 @@ function FinalSim({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
       </div>
 
       <div className="bg-card border border-border rounded-2xl p-4 sm:p-6">
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <div className="flex items-center gap-2">
-            <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
-            <div className="text-sm font-medium">{name}</div>
+        <div className="flex items-center justify-between gap-4 mb-4 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[seat]}`} />
+            <div className="text-sm font-medium truncate min-w-0">{name}</div>
           </div>
-          <div className="font-mono text-3xl sm:text-4xl text-foreground">
+          <div className="font-mono text-3xl sm:text-4xl text-foreground flex-shrink-0">
             {shown >= total
               ? `${String(finalRecord.wins).padStart(2, "0")}-${String(finalRecord.losses).padStart(2, "0")}`
               : <span className="text-lg text-muted-foreground animate-pulse">Simulating…</span>}
@@ -847,9 +830,9 @@ function FinalSim({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
 
         <div className="mt-4 grid gap-1">
           {roster.slice(0, 5).map((p, i) => (
-            <div key={i} className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="truncate"><span className="font-mono mr-1">{p.slot}</span>{p.name}</span>
-              <span className="ml-2 shrink-0">{p.era} · {p.rating}</span>
+            <div key={i} className="flex items-center justify-between text-xs text-muted-foreground min-w-0">
+              <span className="truncate min-w-0"><span className="font-mono mr-1">{p.slot}</span>{p.name}</span>
+              <span className="ml-2 flex-shrink-0">{p.era} · {p.rating}</span>
             </div>
           ))}
         </div>
@@ -951,23 +934,19 @@ function SimInfoModal({ onClose }: { onClose: () => void }) {
           </div>
           <div>
             <div className="text-foreground font-medium mb-0.5">Defense (weighted 55%)</div>
-            Defense is the dominant factor. Teams with elite defenders — Kawhi, Draymond, Bill Russell, Gary Payton, Dennis Rodman, Ben Wallace — meaningfully suppress the opposing team's offense. A lockdown defense can neutralise higher-rated opponents.
+            Defense is the dominant factor. Teams with elite defenders suppress the opposing offense. A lockdown defense can neutralise higher-rated opponents.
           </div>
           <div>
             <div className="text-foreground font-medium mb-0.5">Offense (weighted 45%)</div>
-            Superstars like LeBron, Jordan, Steph, Shaq, and KD carry an extra offensive bonus on top of their rating. The better your offense, the harder it is for the opposing defense to stop you.
-          </div>
-          <div>
-            <div className="text-foreground font-medium mb-0.5">Shooting vs defenders</div>
-            Every offensive player's scoring is contested by the opposing defense's average defensive rating. Elite shooters on weak-defense teams will be less punished than the same shooter facing a lockdown unit.
+            Superstars like LeBron, Jordan, Steph, Shaq, and KD carry an extra offensive bonus on top of their rating.
           </div>
           <div>
             <div className="text-foreground font-medium mb-0.5">Era boost</div>
-            Older eras receive a small bonus so legends from the 60s–80s remain competitive against modern players with inflated ratings.
+            Older eras receive a small bonus so legends from the 60s–80s remain competitive.
           </div>
           <div>
             <div className="text-foreground font-medium mb-0.5">Legendary tier (WOW)</div>
-            All-time greats carry an additional bonus on top of all the above. Stacking multiple legends compounds the advantage.
+            All-time greats carry an additional bonus. Stacking multiple legends compounds the advantage.
           </div>
         </div>
         <button
@@ -1003,19 +982,16 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
 
   return (
     <div className="py-10 max-w-4xl mx-auto">
-
-      {/* ── Winner banner ── */}
       <div className="text-center mb-10 relative">
-        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Team vs Team · Final</div>
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Team vs Team · Finals</div>
         <h2 className={`font-display text-4xl sm:text-5xl mt-2 ${youWin ? "text-emerald-300" : "text-foreground"}`}>
           {tie ? "Tie" : `${winnerName} wins`}
         </h2>
         {tb && winner > 0 && finalists.length === 2 && (
           <div className="text-sm text-muted-foreground mt-2">
-            1-on-1 final: {tbScores[String(finalists[0])] ?? 0}–{tbScores[String(finalists[1])] ?? 0}
+            3v3 Finals: {tbScores[String(finalists[0])] ?? 0}–{tbScores[String(finalists[1])] ?? 0}
           </div>
         )}
-        {/* ℹ info button */}
         <button
           onClick={() => setShowInfo(true)}
           title="How the sim works"
@@ -1027,7 +1003,6 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
 
       {showInfo && <SimInfoModal onClose={() => setShowInfo(false)} />}
 
-      {/* ── Match results ── */}
       {matchups.length > 0 && (
         <div className="bg-card border border-border rounded-2xl p-5 mb-6">
           <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-3">Results</div>
@@ -1037,11 +1012,11 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
               const nameA = seatName(room, m.seatA as SeatN) ?? `P${m.seatA}`;
               const nameB = seatName(room, m.seatB as SeatN) ?? `P${m.seatB}`;
               return (
-                <div key={i} className="flex items-center gap-3 text-sm">
+                <div key={i} className="flex items-center gap-3 text-sm min-w-0">
                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatA]}`} />
-                  <span className={`flex-1 truncate font-medium ${winnerIsA ? SEAT_TEXT[m.seatA as SeatN] : "text-muted-foreground"}`}>{nameA}</span>
+                  <span className={`flex-1 truncate min-w-0 font-medium ${winnerIsA ? SEAT_TEXT[m.seatA as SeatN] : "text-muted-foreground"}`}>{nameA}</span>
                   <span className="text-[10px] text-muted-foreground font-mono shrink-0">{winnerIsA ? "beat" : "lost to"}</span>
-                  <span className={`flex-1 truncate text-right font-medium ${!winnerIsA ? SEAT_TEXT[m.seatB as SeatN] : "text-muted-foreground"}`}>{nameB}</span>
+                  <span className={`flex-1 truncate min-w-0 text-right font-medium ${!winnerIsA ? SEAT_TEXT[m.seatB as SeatN] : "text-muted-foreground"}`}>{nameB}</span>
                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[m.seatB]}`} />
                 </div>
               );
@@ -1050,7 +1025,6 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
         </div>
       )}
 
-      {/* ── All teams' rosters + MVP ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
         {seats.map((s) => {
           const roster = seatTeam(room, s);
@@ -1059,13 +1033,12 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
           const isFinalist = finalists.includes(s);
           return (
             <div key={s} className={`bg-card border rounded-2xl p-4 ${isWinner ? "border-foreground/40 ring-1 " + SEAT_RING[s] : isFinalist ? "border-border" : "border-border opacity-70"}`}>
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[s]}`} />
-                <div className={`text-sm font-semibold truncate ${isWinner ? SEAT_TEXT[s] : ""}`}>{seatName(room, s)}</div>
-                {isWinner && <span className="ml-auto text-xs">🏆</span>}
-                {!isWinner && isFinalist && <span className="ml-auto text-[10px] uppercase tracking-widest text-muted-foreground">Finalist</span>}
+              <div className="flex items-center gap-2 mb-3 min-w-0">
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[s]}`} />
+                <div className={`text-sm font-semibold truncate min-w-0 ${isWinner ? SEAT_TEXT[s] : ""}`}>{seatName(room, s)}</div>
+                {isWinner && <span className="ml-auto flex-shrink-0 text-xs">🏆</span>}
+                {!isWinner && isFinalist && <span className="ml-auto flex-shrink-0 text-[10px] uppercase tracking-widest text-muted-foreground">Finalist</span>}
               </div>
-              {/* MVP */}
               {mvp && (
                 <div className="mb-3 px-3 py-2 rounded-lg bg-background/60 border border-border">
                   <div className="text-[9px] uppercase tracking-[0.2em] text-muted-foreground">MVP</div>
@@ -1073,12 +1046,11 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
                   <div className="text-[10px] text-muted-foreground">{mvp.slot} · {mvp.era} · {mvp.rating}</div>
                 </div>
               )}
-              {/* Full roster */}
               <div className="space-y-1">
                 {roster.map((p, i) => (
-                  <div key={i} className="flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span className="truncate"><span className="font-mono mr-1.5">{p.slot}</span>{p.name}</span>
-                    <span className="ml-2 shrink-0 font-mono">{p.rating}</span>
+                  <div key={i} className="flex items-center justify-between text-[11px] text-muted-foreground min-w-0">
+                    <span className="truncate min-w-0"><span className="font-mono mr-1.5">{p.slot}</span>{p.name}</span>
+                    <span className="ml-2 flex-shrink-0 font-mono">{p.rating}</span>
                   </div>
                 ))}
               </div>
@@ -1087,14 +1059,13 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
         })}
       </div>
 
-      {/* ── 1-on-1 final ── */}
       {tb && finalists.length === 2 && (() => {
         const [sA, sB] = finalists;
         const nameA = seatName(room, sA) ?? `P${sA}`;
         const nameB = seatName(room, sB) ?? `P${sB}`;
         return (
           <div className="bg-card border border-border rounded-2xl p-5 mb-6">
-            <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-3">1-on-1 final</div>
+            <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground mb-3">3v3 Finals</div>
             <div className="flex items-center gap-3 mb-4">
               <div className={`flex-1 text-center rounded-lg py-2 bg-background/40 ${tbScores[String(sA)] > tbScores[String(sB)] ? "ring-1 " + SEAT_RING[sA] : ""}`}>
                 <div className={`text-xs truncate px-1 ${SEAT_TEXT[sA]}`}>{nameA}</div>
@@ -1108,40 +1079,23 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
             </div>
             <div className="space-y-1.5">
               {tb.history.map((h, i) => {
-                const offName = seatName(room, h.offense as SeatN) ?? `P${h.offense}`;
                 const defSeat = finalists.find((s) => s !== h.offense) as SeatN;
-                const defName = seatName(room, defSeat) ?? `P${defSeat}`;
-                const offMove = h.moves[String(h.offense)] ?? "?";
-                const defMove = h.moves[String(defSeat)] ?? "?";
+                const offName = seatName(room, h.offense as SeatN) ?? `P${h.offense}`;
+                const resultIcon = h.result === "made" ? "✓" : "✗";
+                const outcomeLabel = h.outcome === "blocked" ? "perfect read" : h.outcome === "contested" ? "contested" : "open";
                 return (
-                  <div key={i} className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 bg-background/40">
+                  <div key={i} className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 bg-background/40 flex-wrap">
                     <span className="text-muted-foreground font-mono w-4 flex-shrink-0">R{h.round}</span>
-                    <span className={`flex-1 truncate ${SEAT_TEXT[h.offense as SeatN]}`}>
-                      {offName} <span className="text-muted-foreground">→</span> <span className="font-medium">{offMove}</span>
-                    </span>
-                    <span className="text-muted-foreground shrink-0">vs</span>
-                    <span className={`flex-1 truncate text-right ${SEAT_TEXT[defSeat]}`}>
-                      <span className="font-medium">{defMove}</span> <span className="text-muted-foreground">←</span> {defName}
-                    </span>
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[h.roundWinner as SeatN]}`} />
+                    <span className={`font-medium ${SEAT_TEXT[h.offense as SeatN]}`}>{h.offensePlayer}</span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="font-medium">{h.shotType}</span>
+                    <span className="text-muted-foreground">·</span>
+                    <span className="text-[10px] text-muted-foreground">{outcomeLabel}</span>
+                    <span className={`ml-auto font-bold flex-shrink-0 ${h.result === "made" ? "text-emerald-300" : "text-rose-300"}`}>{resultIcon}</span>
                   </div>
                 );
               })}
             </div>
-            {tb.avatars && (
-              <div className="mt-4 pt-4 border-t border-border grid grid-cols-2 gap-2">
-                {finalists.map((s) => {
-                  const av = tb.avatars[String(s)];
-                  return (
-                    <div key={s} className={`rounded-lg px-3 py-2 bg-background/40 ${s === winner ? "ring-1 " + SEAT_RING[s] : ""}`}>
-                      <div className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground">Isolation</div>
-                      <div className={`text-[10px] truncate mt-0.5 ${SEAT_TEXT[s]}`}>{seatName(room, s)}</div>
-                      <div className="font-display text-sm mt-0.5 truncate">{av?.name ?? "—"}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         );
       })()}
@@ -1162,17 +1116,17 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
 function FinalCard({ seat, name, record, roster, winner, isTvt }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; roster: DraftedPlayer[]; winner: boolean; isTvt?: boolean }) {
   return (
     <div className={`bg-card border rounded-xl p-3 text-left ${winner ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-80"}`}>
-      <div className="flex items-center gap-2">
-        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
-        <div className="text-sm font-medium truncate">{name}</div>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[seat]}`} />
+        <div className="text-sm font-medium truncate min-w-0">{name}</div>
       </div>
       <div className="font-mono text-3xl sm:text-4xl text-foreground my-2">{record?.wins ?? 0}-{record?.losses ?? 0}</div>
       {isTvt && <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-1">vs teams</div>}
       <div className="space-y-0.5">
         {roster.map((p, i) => (
-          <div key={i} className="text-[11px] flex justify-between text-muted-foreground">
-            <span className="truncate"><span className="font-mono mr-1">{p.slot}</span>{p.name}</span>
-            <span className="ml-2 shrink-0">{p.era} · {p.rating}</span>
+          <div key={i} className="text-[11px] flex justify-between text-muted-foreground min-w-0">
+            <span className="truncate min-w-0"><span className="font-mono mr-1">{p.slot}</span>{p.name}</span>
+            <span className="ml-2 flex-shrink-0">{p.era} · {p.rating}</span>
           </div>
         ))}
       </div>
@@ -1180,33 +1134,18 @@ function FinalCard({ seat, name, record, roster, winner, isTvt }: { seat: SeatN;
   );
 }
 
-/* ---------------- TIEBREAKER PICK ---------------- */
+/* ---------------- FINALS PICK (3 players each) ---------------- */
 
-function TiebreakerPick({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+function FinalsPick({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   const tb = room.tiebreaker!;
   const finalists = tb.players;
   const isFinalist = finalists.includes(me as SeatN);
-  const myAvatar = isFinalist ? tb.avatars[String(me)] : null;
-  const myRoster: DraftedPlayer[] = isFinalist ? seatTeam(room, me as SeatN) : [];
+  const myRoster = tb.finalistRosters[String(me)] ?? [];
   const iAmHost = me === 1;
-
-  useEffect(() => {
-    if (!iAmHost) return;
-    for (const s of finalists) {
-      if (isBot(room, s) && !tb.avatars[String(s)]) {
-        const team = seatTeam(room, s);
-        if (team.length === 0) continue;
-        const pick = team.reduce((a, b) => (a.rating >= b.rating ? a : b));
-        const t = setTimeout(() => pickAvatar(getPlayerId(), pick.name), 700);
-        return () => clearTimeout(t);
-      }
-    }
-  }, [room, tb, finalists, iAmHost]);
-
   const isTvt = (room.gameMode ?? "classic") === "tvt";
   const [bracketDone, setBracketDone] = useState(!isTvt);
   const matchupCount = room.tvtMatchups?.length ?? 0;
-  // After all matchups + standings have been revealed (matchupCount * 0.8s + 1.5s grace), show the pick UI.
+
   useEffect(() => {
     if (!isTvt) return;
     const delay = matchupCount * 800 + 2200;
@@ -1214,148 +1153,337 @@ function TiebreakerPick({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     return () => clearTimeout(t);
   }, [isTvt, matchupCount]);
 
-  return (
-    <div>
-      {isTvt && <TvtBracket room={room} me={me} />}
-      {(!isTvt || bracketDone) && (
-      <div className="py-8 text-center max-w-3xl mx-auto">
-      <div className={`text-[10px] uppercase tracking-[0.28em] ${isTvt ? "text-muted-foreground" : "text-emerald-300"}`}>
-        {isTvt ? "Team vs Team · Final" : "Both perfect"}
-      </div>
-      <h2 className="font-display text-3xl sm:text-4xl mt-2 mb-2">1-on-1 tiebreaker</h2>
-      <p className="text-sm text-muted-foreground mb-8">
-        {isTvt ? "Top 2 teams clash. Pick your isolation player. First to 3 wins." : "Finalists pick their isolation player. First to 3 takes it."}
-      </p>
-      <div className="grid grid-cols-2 gap-3 mb-8">
-        {finalists.map((s) => (
-          <AvatarSlot key={s} seat={s} name={seatName(room, s)} avatar={tb.avatars[String(s)]} />
-        ))}
-      </div>
-      {isFinalist && !myAvatar && (
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          {myRoster.map((p, i) => (
-            <button
-              key={i}
-              onClick={() => pickAvatar(getPlayerId(), p.name)}
-              className="p-3 rounded-lg border border-border bg-card hover:border-foreground/40 transition text-left"
-            >
-              <div className="text-sm font-medium">{p.name}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">{p.slot} · {p.era}</div>
-            </button>
-          ))}
-        </div>
-      )}
-      {isFinalist && myAvatar && finalists.some((s) => !tb.avatars[String(s)]) && (
-        <div className="text-sm text-muted-foreground animate-pulse">Waiting for opponent…</div>
-      )}
-      {!isFinalist && <div className="text-sm text-muted-foreground">Watching the finals…</div>}
-    </div>
-      )}
-    </div>
-  );
-}
-
-function AvatarSlot({ seat, name, avatar }: { seat: SeatN; name: string | null; avatar: Player | null }) {
-  return (
-    <div className={`p-5 border rounded-xl ${avatar ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-dashed border-border opacity-60"}`}>
-      <div className="flex items-center gap-2 justify-center">
-        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
-        <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{name}</div>
-      </div>
-      <div className="font-display text-2xl mt-2">{avatar?.name ?? "…"}</div>
-      {avatar && <div className="text-[10px] text-muted-foreground mt-1">{avatar.era}</div>}
-    </div>
-  );
-}
-
-/* ---------------- TIEBREAKER ---------------- */
-
-function Tiebreaker({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
-  const tb = room.tiebreaker!;
-  const finalists = tb.players;
-  const isFinalist = finalists.includes(me as SeatN);
-  const myMove = isFinalist ? tb.moves[String(me)] : null;
-  const oppSeat = finalists.find((s) => s !== me) as SeatN | undefined;
-  const oppMoveSubmitted = oppSeat ? !!tb.moves[String(oppSeat)] : false;
-  const iAmOffense = tb.offense === me;
-  const offenseSeat = tb.offense;
-  const defenseSeat = finalists.find((s) => s !== offenseSeat) as SeatN;
-  const offenseName = tb.avatars[String(offenseSeat)]?.name;
-  const defenseName = tb.avatars[String(defenseSeat)]?.name;
-  const iAmHost = me === 1;
-
+  // Bot: pick 3 highest-rated players
   useEffect(() => {
     if (!iAmHost) return;
     for (const s of finalists) {
-      if (isBot(room, s) && !tb.moves[String(s)]) {
-        const onOffense = tb.offense === s;
-        const moves = onOffense ? ["drive", "shoot", "fade"] : ["paint", "perimeter"];
-        const m = moves[Math.floor(Math.random() * moves.length)];
-        const t = setTimeout(() => submitMove(getPlayerId(), m), 900);
-        return () => clearTimeout(t);
-      }
+      if (!isBot(room, s)) continue;
+      const current = tb.finalistRosters[String(s)] ?? [];
+      if (current.length >= 3) continue;
+      const team = seatTeam(room, s);
+      const picked = new Set(current.map((p) => p.name));
+      const next = team
+        .filter((p) => !picked.has(p.name))
+        .sort((a, b) => b.rating - a.rating)[0];
+      if (!next) continue;
+      const t = setTimeout(() => pickFinalistPlayer(getPlayerId(), next.name), 700);
+      return () => clearTimeout(t);
     }
   }, [room, tb, finalists, iAmHost]);
 
   return (
-    <div className="py-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-center gap-10 mb-6">
-        <ScoreCol seat={finalists[0]} name={seatName(room, finalists[0])} score={tb.scores[String(finalists[0])] ?? 0} />
-        <div className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Rd {tb.round}</div>
-        <ScoreCol seat={finalists[1]} name={seatName(room, finalists[1])} score={tb.scores[String(finalists[1])] ?? 0} />
-      </div>
-
-      <div className="text-center mb-6">
-        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Matchup</div>
-        <div className="text-lg sm:text-xl mt-1">
-          <span className={`font-medium ${SEAT_TEXT[offenseSeat]}`}>{offenseName}</span>
-          <span className="text-muted-foreground"> on </span>
-          <span className={`font-medium ${SEAT_TEXT[defenseSeat]}`}>{defenseName}</span>
-        </div>
-        {isFinalist && (
-          <div className="text-xs mt-2 text-muted-foreground">
-            You are on <span className="text-foreground">{iAmOffense ? "OFFENSE" : "DEFENSE"}</span>
+    <div>
+      {isTvt && <TvtBracket room={room} me={me} />}
+      {(!isTvt || bracketDone) && (
+        <div className="py-8 text-center max-w-3xl mx-auto">
+          <div className={`text-[10px] uppercase tracking-[0.28em] ${isTvt ? "text-muted-foreground" : "text-emerald-300"}`}>
+            {isTvt ? "Team vs Team · Finals" : "Both perfect"}
           </div>
-        )}
-      </div>
+          <h2 className="font-display text-3xl sm:text-4xl mt-2 mb-2">3v3 Finals</h2>
+          <p className="text-sm text-muted-foreground mb-8">
+            {isTvt
+              ? "Top 2 teams clash. Each team picks 3 players. First to 5 wins."
+              : "Both teams went perfect. Pick your 3. First to 5 takes it."}
+          </p>
 
-      {isFinalist && !myMove && (
-        <div className="max-w-xl mx-auto">
-          {iAmOffense ? (
-            <div className="grid grid-cols-3 gap-2">
-              <MoveBtn label="Drive" desc="Attack rim" onClick={() => submitMove(getPlayerId(), "drive")} />
-              <MoveBtn label="Shoot" desc="Catch & shoot" onClick={() => submitMove(getPlayerId(), "shoot")} />
-              <MoveBtn label="Fade" desc="Step-back" onClick={() => submitMove(getPlayerId(), "fade")} />
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              <MoveBtn label="Paint" desc="Protect rim" onClick={() => submitMove(getPlayerId(), "paint")} />
-              <MoveBtn label="Perimeter" desc="Close out" onClick={() => submitMove(getPlayerId(), "perimeter")} />
-            </div>
+          <div className="grid grid-cols-2 gap-3 mb-8">
+            {finalists.map((s) => {
+              const roster = tb.finalistRosters[String(s)] ?? [];
+              return (
+                <FinalistRosterSlot
+                  key={s}
+                  seat={s}
+                  name={seatName(room, s)}
+                  picks={roster}
+                />
+              );
+            })}
+          </div>
+
+          {isFinalist && myRoster.length < 3 && (
+            <>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-3">
+                Pick your 3 players ({myRoster.length}/3 chosen)
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                {seatTeam(room, me as SeatN).map((p, i) => {
+                  const alreadyPicked = myRoster.some((r) => r.name === p.name);
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => !alreadyPicked && pickFinalistPlayer(getPlayerId(), p.name)}
+                      disabled={alreadyPicked}
+                      className={`p-3 rounded-lg border transition text-left ${
+                        alreadyPicked
+                          ? "border-foreground/40 bg-foreground/5 opacity-60 cursor-default"
+                          : "border-border bg-card hover:border-foreground/40"
+                      }`}
+                    >
+                      <div className="text-sm font-medium leading-tight">{p.name}</div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">{p.slot} · {p.era}</div>
+                      <div className="text-[10px] text-muted-foreground font-mono mt-0.5">{p.rating}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {isFinalist && myRoster.length >= 3 && finalists.some((s) => (tb.finalistRosters[String(s)]?.length ?? 0) < 3) && (
+            <div className="text-sm text-muted-foreground animate-pulse">Waiting for opponent…</div>
+          )}
+
+          {!isFinalist && (
+            <div className="text-sm text-muted-foreground">Watching the Finals… (view only)</div>
           )}
         </div>
       )}
+    </div>
+  );
+}
 
-      {isFinalist && myMove && !oppMoveSubmitted && (
-        <div className="text-center text-sm text-muted-foreground animate-pulse">Waiting for opponent…</div>
+function FinalistRosterSlot({ seat, name, picks }: { seat: SeatN; name: string | null; picks: Player[] }) {
+  return (
+    <div className={`p-4 border rounded-xl ${picks.length >= 3 ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-dashed border-border"}`}>
+      <div className="flex items-center gap-2 justify-center mb-3">
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[seat]}`} />
+        <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground truncate min-w-0">{name}</div>
+      </div>
+      <div className="space-y-1.5">
+        {[0, 1, 2].map((i) => {
+          const p = picks[i];
+          return (
+            <div key={i} className={`rounded px-2 py-1.5 text-xs text-left ${p ? "bg-background/60" : "border border-dashed border-border opacity-40"}`}>
+              {p ? (
+                <>
+                  <div className="font-medium truncate">{p.name}</div>
+                  <div className="text-[10px] text-muted-foreground">{(p as DraftedPlayer).slot ?? ""} · {p.era}</div>
+                </>
+              ) : (
+                <div className="text-muted-foreground">slot {i + 1}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- FINALS (3v3 gameplay) ---------------- */
+
+function Finals({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
+  const tb = room.tiebreaker!;
+  const finalists = tb.players;
+  const isFinalist = finalists.includes(me as SeatN);
+  const iAmOffense = tb.offense === me;
+  const defenseSeat = finalists.find((s) => s !== tb.offense) as SeatN;
+  const iAmDefense = defenseSeat === me;
+  const offenseRoster = tb.finalistRosters[String(tb.offense)] ?? [];
+  const defenseRoster = tb.finalistRosters[String(defenseSeat)] ?? [];
+  const myMoveDone = iAmOffense ? !!tb.offenseMove : iAmDefense ? !!tb.defenseMove : false;
+  const iAmHost = me === 1;
+
+  // Bot offense
+  useEffect(() => {
+    if (!iAmHost) return;
+    if (tb.offense === me) return;
+    const botOffSeat = finalists.find((s) => isBot(room, s) && s === tb.offense);
+    if (!botOffSeat || tb.offenseMove) return;
+    const roster = tb.finalistRosters[String(botOffSeat)] ?? [];
+    if (!roster.length) return;
+    const player = roster[Math.floor(Math.random() * roster.length)];
+    const shots = getShotsForPlayer(player.name, (player as DraftedPlayer).slot ?? "SG");
+    const shot = shots[Math.floor(Math.random() * shots.length)];
+    const t = setTimeout(() => submitOffenseMove(getPlayerId(), player.name, shot), 900 + Math.random() * 600);
+    return () => clearTimeout(t);
+  }, [room, tb, finalists, iAmHost, me]);
+
+  // Bot defense
+  useEffect(() => {
+    if (!iAmHost) return;
+    const botDefSeat = finalists.find((s) => isBot(room, s) && s === defenseSeat);
+    if (!botDefSeat || tb.defenseMove) return;
+    const oppRoster = tb.finalistRosters[String(tb.offense)] ?? [];
+    if (!oppRoster.length) return;
+    const guarded = oppRoster[Math.floor(Math.random() * oppRoster.length)];
+    const defType = DEFENSE_TYPES[Math.floor(Math.random() * DEFENSE_TYPES.length)];
+    const t = setTimeout(() => submitDefenseMove(getPlayerId(), guarded.name, defType), 900 + Math.random() * 600);
+    return () => clearTimeout(t);
+  }, [room, tb, finalists, defenseSeat, iAmHost]);
+
+  const lastHistoryLen = useRef(tb.history.length);
+  const [lastResult, setLastResult] = useState<(typeof tb.history)[0] | null>(null);
+  useEffect(() => {
+    if (tb.history.length > lastHistoryLen.current) {
+      setLastResult(tb.history[tb.history.length - 1]);
+      lastHistoryLen.current = tb.history.length;
+    }
+  }, [tb.history.length]);
+
+  return (
+    <div className="py-6 max-w-3xl mx-auto">
+      {/* Header */}
+      <div className="text-center mb-2">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Finals · Round {tb.round}</div>
+      </div>
+
+      {/* Scoreboard */}
+      <div className="flex items-center justify-center gap-10 mb-8">
+        <FinalsScoreCol seat={finalists[0]} name={seatName(room, finalists[0])} score={tb.scores[String(finalists[0])] ?? 0} />
+        <div className="text-xs uppercase tracking-[0.28em] text-muted-foreground">First to 5</div>
+        <FinalsScoreCol seat={finalists[1]} name={seatName(room, finalists[1])} score={tb.scores[String(finalists[1])] ?? 0} />
+      </div>
+
+      {/* Last result flash */}
+      {lastResult && (
+        <div className={`mb-6 px-4 py-3 rounded-xl text-center border animate-flash-in ${
+          lastResult.result === "made"
+            ? "bg-emerald-500/10 border-emerald-400/30 text-emerald-300"
+            : "bg-rose-500/10 border-rose-400/30 text-rose-300"
+        }`}>
+          <div className="text-sm font-medium">
+            {lastResult.offensePlayer} → {lastResult.shotType}
+            <span className="ml-2 text-muted-foreground text-xs">({lastResult.outcome})</span>
+          </div>
+          <div className="text-xs mt-0.5 opacity-80">
+            {lastResult.result === "made" ? "MADE 🏀" : "MISSED ✗"}
+            {" · "}
+            Defense guarded {lastResult.guardedPlayer} · {lastResult.defenseType}
+          </div>
+        </div>
       )}
-      {!isFinalist && <div className="text-center text-sm text-muted-foreground">Watching the 1v1…</div>}
 
-      {tb.history.length > 0 && (
-        <div className="mt-10">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Plays</div>
-          <div className="space-y-1">
-            {tb.history.map((h, i) => (
-              <div key={i} className="flex items-center justify-between bg-card border border-border rounded px-3 py-2 text-xs">
-                <span className="text-muted-foreground">R{h.round}</span>
-                {finalists.map((s) => (
-                  <span key={s} className={SEAT_TEXT[s]}>P{s}: {h.moves[String(s)]}</span>
-                ))}
-                <span className={`${SEAT_TEXT[h.roundWinner]} font-medium`}>
-                  +1 {seatName(room, h.roundWinner)}
-                </span>
+      {/* Offense/Defense UI */}
+      {isFinalist && !myMoveDone && (
+        <div className="mb-6">
+          {iAmOffense ? (
+            <>
+              <div className="text-center mb-4">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-1">You're on OFFENSE</div>
+                <div className="text-sm text-muted-foreground">Pass to a teammate and pick your shot — defense can't see your choice</div>
               </div>
-            ))}
+              <div className="space-y-3">
+                {offenseRoster.map((player) => {
+                  const shots = getShotsForPlayer(player.name, (player as DraftedPlayer).slot ?? "SG");
+                  return (
+                    <div key={player.name} className="bg-card border border-border rounded-xl p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`text-xs font-medium ${SEAT_TEXT[tb.offense]}`}>{player.name}</span>
+                        <span className="text-[10px] text-muted-foreground">{(player as DraftedPlayer).slot} · {player.era} · {player.rating}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {shots.map((shot) => (
+                          <button
+                            key={shot}
+                            onClick={() => submitOffenseMove(getPlayerId(), player.name, shot)}
+                            className="px-2 py-2 rounded-lg border border-border bg-background hover:border-foreground/40 hover:bg-foreground/5 transition text-xs font-medium text-left"
+                          >
+                            {shot}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : iAmDefense ? (
+            <>
+              <div className="text-center mb-4">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-1">You're on DEFENSE</div>
+                <div className="text-sm text-muted-foreground">Guard a player and pick your defensive coverage</div>
+              </div>
+              <div className="space-y-3">
+                {offenseRoster.map((player) => {
+                  return (
+                    <div key={player.name} className="bg-card border border-border rounded-xl p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`text-xs font-medium ${SEAT_TEXT[tb.offense]}`}>{player.name}</span>
+                        <span className="text-[10px] text-muted-foreground">{(player as DraftedPlayer).slot} · {player.era} · {player.rating}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {DEFENSE_TYPES.map((defType) => (
+                          <button
+                            key={defType}
+                            onClick={() => submitDefenseMove(getPlayerId(), player.name, defType)}
+                            className="px-2 py-2 rounded-lg border border-border bg-background hover:border-foreground/40 hover:bg-foreground/5 transition text-xs font-medium text-left"
+                          >
+                            <div>{defType}</div>
+                            <div className="text-[10px] text-muted-foreground opacity-70">vs {player.name.split(" ")[0]}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {isFinalist && myMoveDone && (
+        <div className="text-center text-sm text-muted-foreground animate-pulse mb-6">
+          {iAmOffense ? "Offense locked in — waiting for defense…" : "Defense locked in — waiting for offense…"}
+        </div>
+      )}
+
+      {!isFinalist && (
+        <div className="text-center text-sm text-muted-foreground mb-6">
+          Watching the Finals — view only
+        </div>
+      )}
+
+      {/* Rosters on each side */}
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        {finalists.map((s) => {
+          const roster = tb.finalistRosters[String(s)] ?? [];
+          return (
+            <div key={s} className={`bg-card border rounded-xl p-3 ${s === tb.offense ? "border-foreground/30" : "border-border"}`}>
+              <div className="flex items-center gap-2 mb-2 min-w-0">
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[s]}`} />
+                <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground truncate min-w-0">{seatName(room, s)}</div>
+                {s === tb.offense && <span className="ml-auto flex-shrink-0 text-[9px] uppercase tracking-widest text-foreground/60">OFF</span>}
+                {s !== tb.offense && <span className="ml-auto flex-shrink-0 text-[9px] uppercase tracking-widest text-muted-foreground">DEF</span>}
+              </div>
+              <div className="space-y-1">
+                {roster.map((p) => (
+                  <div key={p.name} className="text-[10px] text-muted-foreground flex items-center gap-1.5 min-w-0">
+                    <span className={`w-1 h-1 rounded-full flex-shrink-0 ${SEAT_DOT[s]}`} />
+                    <span className="truncate min-w-0">{p.name}</span>
+                    <span className="flex-shrink-0 font-mono ml-auto">{p.rating}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Play history */}
+      {tb.history.length > 0 && (
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Play History</div>
+          <div className="space-y-1">
+            {tb.history.map((h, i) => {
+              const offName = seatName(room, h.offense as SeatN) ?? `P${h.offense}`;
+              const defSeat = finalists.find((s) => s !== h.offense) as SeatN;
+              const defName = seatName(room, defSeat) ?? `P${defSeat}`;
+              const madeIt = h.result === "made";
+              return (
+                <div key={i} className="flex items-center gap-2 bg-card border border-border rounded px-3 py-2 text-xs flex-wrap">
+                  <span className="text-muted-foreground font-mono flex-shrink-0">R{h.round}</span>
+                  <span className={`font-medium flex-shrink-0 ${SEAT_TEXT[h.offense as SeatN]}`}>{h.offensePlayer}</span>
+                  <span className="text-muted-foreground flex-shrink-0">→</span>
+                  <span className="flex-shrink-0">{h.shotType}</span>
+                  <span className="text-[10px] text-muted-foreground flex-shrink-0">({h.outcome})</span>
+                  <span className={`ml-auto font-bold flex-shrink-0 ${madeIt ? "text-emerald-300" : "text-rose-300"}`}>
+                    {madeIt ? "IN +" : "OUT +"}{seatName(room, h.roundWinner as SeatN)}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1363,26 +1491,14 @@ function Tiebreaker({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
   );
 }
 
-function ScoreCol({ seat, name, score }: { seat: SeatN; name: string | null; score: number }) {
+function FinalsScoreCol({ seat, name, score }: { seat: SeatN; name: string | null; score: number }) {
   return (
     <div className="text-center">
-      <div className="flex items-center justify-center gap-2">
-        <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[seat]}`} />
-        <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{name}</div>
+      <div className="flex items-center justify-center gap-2 mb-1">
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEAT_DOT[seat]}`} />
+        <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground truncate max-w-[100px]">{name}</div>
       </div>
-      <div className="font-mono text-5xl text-foreground mt-1">{score}</div>
+      <div className="font-mono text-5xl text-foreground">{score}</div>
     </div>
-  );
-}
-
-function MoveBtn({ label, desc, onClick }: { label: string; desc: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="p-4 rounded-lg border border-border bg-card hover:border-foreground/40 transition text-left"
-    >
-      <div className="text-base font-medium">{label}</div>
-      <div className="text-[11px] text-muted-foreground mt-0.5">{desc}</div>
-    </button>
   );
 }
