@@ -33,11 +33,16 @@ class GameSync {
       if (!peerManager.isHost) return;
       const room = useP2PStore.getState().room;
       if (!room) return;
-      // Small delay to let the DataChannel finish opening on both ends.
+      // Send at 400ms, then again at 1.5s as a fallback in case the first
+      // message is dropped before the joiner's DataChannel is fully ready.
       setTimeout(() => {
         const currentRoom = useP2PStore.getState().room;
         if (currentRoom) peerManager.sendTo(peerId, "sync-room", currentRoom);
-      }, 150);
+      }, 400);
+      setTimeout(() => {
+        const currentRoom = useP2PStore.getState().room;
+        if (currentRoom) peerManager.sendTo(peerId, "sync-room", currentRoom);
+      }, 1_500);
     });
 
     peerManager.onConnectionChange((c) => {
@@ -68,11 +73,13 @@ class GameSync {
   private scheduleReconnect() {
     if (this.reconnectTimer) return;
     const room = useP2PStore.getState().room;
-    if (!room || room.phase === "lobby" || room.phase === "result") return;
+    // Allow reconnection in any phase — including lobby. A dropped connection
+    // during lobby means the joiner won't receive the "start draft" broadcast.
+    if (!room || room.phase === "result") return;
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
       const currentRoom = useP2PStore.getState().room;
-      if (!currentRoom) return;
+      if (!currentRoom || currentRoom.phase === "result") return;
       try {
         await peerManager.reconnectToHost(currentRoom.code);
         this.requestSync();
