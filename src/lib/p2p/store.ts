@@ -8,14 +8,36 @@ export interface RoomPlayer {
   seat: Seat;
 }
 
+export interface FinalsOffenseMove {
+  playerName: string;
+  shotType: string;
+}
+
+export interface FinalsDefenseMove {
+  guardedPlayer: string;
+  defenseType: string;
+}
+
 export interface TiebreakerState {
   players: Seat[];
-  avatars: Record<string, Player | null>;
-  moves: Record<string, string | null>;
+  finalistRosters: Record<string, Player[]>;
+  ballHolder: Record<string, string | null>;
+  offenseMove: FinalsOffenseMove | null;
+  defenseMove: FinalsDefenseMove | null;
   scores: Record<string, number>;
   round: number;
   offense: Seat;
-  history: Array<{ round: number; offense: Seat; moves: Record<string, string>; roundWinner: Seat }>;
+  history: Array<{
+    round: number;
+    offense: Seat;
+    offensePlayer: string;
+    shotType: string;
+    guardedPlayer: string;
+    defenseType: string;
+    outcome: "open" | "contested" | "blocked";
+    result: "made" | "missed";
+    roundWinner: Seat;
+  }>;
 }
 
 export type GameMode = "classic" | "tvt";
