@@ -5,7 +5,7 @@ import { gameSync } from "./game-sync";
 import { ALL_SEATS, type Seat, genRoomCode } from "@/lib/game";
 
 const SNAP_PREFIX = "lovable-room-snap-";
-const SNAP_TTL_MS = 3 * 60 * 1000; // 3 minutes
+const SNAP_TTL_MS = 3 * 60 * 1000;
 
 export function saveRoomSnapshot(room: GameRoom) {
   if (typeof localStorage === "undefined") return;
@@ -97,9 +97,6 @@ export const roomManager = {
     await peerManager.connectToHost(code);
     gameSync.requestSync();
 
-    // Poll up to 6 seconds for the host to send back the room state.
-    // Re-send the sync request every second in case the first one was dropped
-    // (WebRTC DataChannels can silently discard messages sent right after open).
     let room: GameRoom | null = null;
     for (let i = 0; i < 24; i++) {
       await new Promise((r) => setTimeout(r, 250));
@@ -109,6 +106,11 @@ export const roomManager = {
     }
 
     if (!room) throw new Error("Host did not respond — room may not exist");
+
+    // Game already in progress — can't join mid-game
+    if (room.phase !== "lobby") {
+      throw new Error("Game already started — you can't join a game in progress");
+    }
 
     if (!room.players.some((p) => p.id === playerId)) {
       const used = new Set(room.players.map((p) => p.seat));
@@ -152,8 +154,6 @@ export const roomManager = {
     if (!snap) return null;
     await peerManager.initHost(code).catch(() => { /* */ });
     gameSync.init();
-    // Reset turnStartedAt to now so the turn timer starts fresh on resume,
-    // preventing an instant timeout/autoplay on the current turn.
     const resumed: GameRoom = {
       ...snap,
       turnStartedAt: new Date().toISOString(),
