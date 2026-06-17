@@ -31,6 +31,7 @@ class PeerManager {
   public selfId = "";
   public isHost = false;
   private connStateListeners = new Set<(connected: boolean) => void>();
+  private newPeerListeners = new Set<(peerId: string) => void>();
 
   async initHost(roomCode: string): Promise<string> {
     await this.destroy();
@@ -84,9 +85,19 @@ class PeerManager {
     });
   }
 
+  onNewPeer(cb: (peerId: string) => void): () => void {
+    this.newPeerListeners.add(cb);
+    return () => this.newPeerListeners.delete(cb);
+  }
+
+  private emitNewPeer(peerId: string) {
+    for (const cb of this.newPeerListeners) cb(peerId);
+  }
+
   private wireConnection(conn: DataConnection) {
     this.connections.set(conn.peer, conn);
     this.emitConnState();
+    this.emitNewPeer(conn.peer);
     conn.on("data", (raw) => {
       const msg = raw as P2PMessage;
       const h = this.handlers.get(msg.type);

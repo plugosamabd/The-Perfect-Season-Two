@@ -5,6 +5,7 @@ import { gameSync } from "./game-sync";
 import { ALL_SEATS, type Seat, genRoomCode } from "@/lib/game";
 
 const SNAP_PREFIX = "lovable-room-snap-";
+const SNAP_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
 export function saveRoomSnapshot(room: GameRoom) {
   if (typeof localStorage === "undefined") return;
@@ -23,6 +24,10 @@ export function loadRoomSnapshot(code: string): GameRoom | null {
     const raw = localStorage.getItem(SNAP_PREFIX + code);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { room: GameRoom; ts: number };
+    if (Date.now() - parsed.ts > SNAP_TTL_MS) {
+      localStorage.removeItem(SNAP_PREFIX + code);
+      return null;
+    }
     return parsed.room ?? null;
   } catch { return null; }
 }
@@ -37,6 +42,10 @@ export function findResumableSnapshot(hostId: string): GameRoom | null {
       const parsed = JSON.parse(localStorage.getItem(k) ?? "");
       if (!parsed?.room || parsed.room.hostId !== hostId) continue;
       if (parsed.room.phase === "result" || parsed.room.phase === "lobby") continue;
+      if (Date.now() - parsed.ts > SNAP_TTL_MS) {
+        localStorage.removeItem(k);
+        continue;
+      }
       if (!best || parsed.ts > best.ts) best = parsed;
     } catch { /* */ }
   }
@@ -88,12 +97,15 @@ export const roomManager = {
     await peerManager.connectToHost(code);
     gameSync.requestSync();
 
-    // Poll up to 4 seconds for the host to send back the room state.
+    // Poll up to 6 seconds for the host to send back the room state.
+    // Re-send the sync request every second in case the first one was dropped
+    // (WebRTC DataChannels can silently discard messages sent right after open).
     let room: GameRoom | null = null;
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 24; i++) {
       await new Promise((r) => setTimeout(r, 250));
       room = useP2PStore.getState().room;
       if (room) break;
+      if (i > 0 && i % 4 === 0) gameSync.requestSync();
     }
 
     if (!room) throw new Error("Host did not respond — room may not exist");

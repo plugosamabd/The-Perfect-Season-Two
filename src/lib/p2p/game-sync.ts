@@ -27,6 +27,19 @@ class GameSync {
       useP2PStore.getState().addMessage(data as ChatMessage);
     });
 
+    // When the host gets a new connection, proactively push the current room state
+    // so the joiner doesn't have to wait for their request-sync message to arrive.
+    peerManager.onNewPeer((peerId) => {
+      if (!peerManager.isHost) return;
+      const room = useP2PStore.getState().room;
+      if (!room) return;
+      // Small delay to let the DataChannel finish opening on both ends.
+      setTimeout(() => {
+        const currentRoom = useP2PStore.getState().room;
+        if (currentRoom) peerManager.sendTo(peerId, "sync-room", currentRoom);
+      }, 150);
+    });
+
     peerManager.onConnectionChange((c) => {
       useP2PStore.setState({ connected: c });
       // If we're a guest and just lost our connection mid-game, schedule a reconnect.
