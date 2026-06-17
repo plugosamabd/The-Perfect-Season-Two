@@ -168,6 +168,7 @@ function JoinFromLink({ code }: { code: string }) {
   const [name, setName] = useState(savedName);
   // If the player already has a saved name, auto-attempt reconnect immediately.
   const [busy, setBusy] = useState(!!savedName);
+  const [statusMsg, setStatusMsg] = useState("Reconnecting to room…");
   const [err, setErr] = useState<string | null>(null);
 
   async function attemptJoin(joinName: string) {
@@ -175,9 +176,10 @@ function JoinFromLink({ code }: { code: string }) {
     setPlayerName(joinName.trim());
     setBusy(true);
     setErr(null);
+    setStatusMsg("Connecting…");
     try {
       const pid = getPlayerId();
-      await roomManager.joinExistingRoom(code, pid, joinName.trim());
+      await roomManager.joinExistingRoom(code, pid, joinName.trim(), setStatusMsg);
       // On success the Zustand store updates → RoomPage re-renders with the game.
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : "Could not connect to room");
@@ -196,13 +198,13 @@ function JoinFromLink({ code }: { code: string }) {
     await attemptJoin(name);
   }
 
-  // While auto-reconnecting, show a clean loading screen instead of the form.
+  // While connecting, show a clean status screen instead of the form.
   if (busy && !err) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
         <div className="text-center space-y-3">
           <div className="font-mono text-4xl tracking-[0.3em] text-foreground">{code}</div>
-          <div className="text-sm text-muted-foreground animate-pulse">Reconnecting to room…</div>
+          <div className="text-sm text-muted-foreground animate-pulse">{statusMsg}</div>
         </div>
       </div>
     );
