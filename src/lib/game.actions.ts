@@ -13,16 +13,16 @@ import {
   PICKS_PER_PLAYER,
   POSITIONS,
   TURN_SECONDS,
-  resolveRound,
+  resolveFinalsRound,
   simSeason,
   simMatchup,
-  type DefenseMove,
+  getShotsForPlayer,
+  DEFENSE_TYPES,
   type DraftedPlayer,
-  type OffenseMove,
   type Seat,
   type SpinResult,
 } from "@/lib/game";
-import { useP2PStore, gameSync, type GameRoom, type TiebreakerState } from "@/lib/p2p";
+import { useP2PStore, gameSync, type GameRoom, type TiebreakerState, type FinalsOffenseMove, type FinalsDefenseMove } from "@/lib/p2p";
 
 function nowIso() { return new Date().toISOString(); }
 function seatOf(room: GameRoom, playerId: string): Seat | null {
@@ -89,18 +89,17 @@ function canDrive(room: GameRoom, playerId: string): boolean {
   return seatOf(room, playerId) === seat;
 }
 
-// First spin — picks the team.
+// First spin — picks the team. Timer does NOT reset here (only resets on turn advance).
 export function spin(playerId: string): SpinResult | null {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "draft" || room.spinResult) return room?.spinResult ?? null;
   if (!canDrive(room, playerId)) return null;
   const result = pickTeamSpin();
-  // Reset turnStartedAt so the pick timer starts fresh from this spin step.
-  commit({ ...room, spinResult: result, turnStartedAt: nowIso() });
+  commit({ ...room, spinResult: result });
   return result;
 }
 
-// Second spin — picks the era for the already-chosen team.
+// Second spin — picks the era. Timer does NOT reset here.
 export function spinEra(playerId: string): SpinResult | null {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "draft" || !room.spinResult || room.spinResult.era) {
@@ -108,8 +107,7 @@ export function spinEra(playerId: string): SpinResult | null {
   }
   if (!canDrive(room, playerId)) return null;
   const result = pickEraSpin(room.spinResult);
-  // Reset turnStartedAt so the pick timer starts fresh from this era-spin step.
-  commit({ ...room, spinResult: result, turnStartedAt: nowIso() });
+  commit({ ...room, spinResult: result });
   return result;
 }
 
@@ -150,8 +148,6 @@ export function pickPlayer(playerId: string, playerName: string, position: Posit
   return true;
 }
 
-// Respin within a turn: choose to re-spin TEAM (keep era) or ERA (keep team).
-// One respin per turn, drawn from the seat's respinsTotal budget.
 export function respin(playerId: string, which: "team" | "era"): boolean {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "draft" || !room.spinResult || !room.spinResult.era) return false;
@@ -179,7 +175,6 @@ export function respin(playerId: string, which: "team" | "era"): boolean {
       eraRotation: rotationFor(eraAll.length, eraIndex, 4, 3),
     };
   } else {
-    // Respin team — keep era. Pick a team that has the current era; fallback to any.
     const currentEra = sr.era as Era;
     const teams = TEAMS_WITH_ROSTER.filter((t) => t !== sr.team && erasForTeam(t).includes(currentEra));
     const pool = teams.length > 0 ? teams : TEAMS_WITH_ROSTER.filter((t) => t !== sr.team);
@@ -205,12 +200,10 @@ export function respin(playerId: string, which: "team" | "era"): boolean {
     spinResult: next,
     respinsUsed: { ...room.respinsUsed, [seat]: used + 1 },
     respinUsedThisTurn: true,
-    turnStartedAt: nowIso(),
   });
   return true;
 }
 
-// force=true lets the host's timer watcher trigger this without waiting for the stale buffer.
 export function autoPlay(step: "spin" | "pick", force = false): boolean {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "draft") return false;
@@ -219,13 +212,12 @@ export function autoPlay(step: "spin" | "pick", force = false): boolean {
   if (!bot && !force && !turnIsStale(room)) return false;
 
   if (step === "spin") {
-    // Handle both phases: team spin first, then era spin.
     if (!room.spinResult) {
-      commit({ ...room, spinResult: pickTeamSpin(), turnStartedAt: nowIso() });
+      commit({ ...room, spinResult: pickTeamSpin() });
       return true;
     }
     if (!room.spinResult.era) {
-      commit({ ...room, spinResult: pickEraSpin(room.spinResult), turnStartedAt: nowIso() });
+      commit({ ...room, spinResult: pickEraSpin(room.spinResult) });
       return true;
     }
     return false;
@@ -265,7 +257,6 @@ export function autoPlay(step: "spin" | "pick", force = false): boolean {
   return true;
 }
 
-
 export function runSim() {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "sim") return;
@@ -274,7 +265,6 @@ export function runSim() {
   const records: Record<number, { wins: number; losses: number }> = {};
 
   if ((room.gameMode ?? "classic") === "tvt") {
-    // Team vs Team — round-robin: every team plays every other team once.
     for (const s of seats) records[s] = { wins: 0, losses: 0 };
     const tvtMatchups: import("@/lib/p2p/store").TvtMatchup[] = [];
     for (let i = 0; i < seats.length; i++) {
@@ -287,7 +277,6 @@ export function runSim() {
         tvtMatchups.push({ seatA: sA, seatB: sB, winner });
       }
     }
-    // Always put the top-2 teams into the 1v1 tiebreaker.
     const sorted = [...seats].sort((a, b) => records[b].wins - records[a].wins);
     const tiebreakerPlayers = sorted.slice(0, 2) as [Seat, Seat];
     commit({
@@ -302,7 +291,6 @@ export function runSim() {
     return;
   }
 
-  // Classic mode — each team sims its own 82-game season.
   for (const s of seats) records[s] = simSeason(teamOf(room, s));
   const perfect = seats.filter((s) => records[s].wins === 82);
   let winner: Seat | null = null;
@@ -334,8 +322,10 @@ export function runSim() {
 function makeFreshTiebreaker(players: Seat[]): TiebreakerState {
   return {
     players,
-    avatars: { [players[0]]: null, [players[1]]: null } as Record<string, Player | null>,
-    moves: { [players[0]]: null, [players[1]]: null },
+    finalistRosters: { [players[0]]: [], [players[1]]: [] },
+    ballHolder: { [players[0]]: null, [players[1]]: null },
+    offenseMove: null,
+    defenseMove: null,
     scores: { [players[0]]: 0, [players[1]]: 0 },
     round: 1,
     offense: players[0],
@@ -343,7 +333,9 @@ function makeFreshTiebreaker(players: Seat[]): TiebreakerState {
   };
 }
 
-export function pickAvatar(playerId: string, playerName: string): boolean {
+// ── Finals: pick 3 players per finalist ──────────────────────────────────────
+
+export function pickFinalistPlayer(playerId: string, playerName: string): boolean {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "tiebreaker_pick" || !room.tiebreaker) return false;
   const tb = room.tiebreaker;
@@ -352,52 +344,140 @@ export function pickAvatar(playerId: string, playerName: string): boolean {
     const bot = tb.players.find((s) => isBotSeat(room, s));
     if (bot) seat = bot; else return false;
   }
+  const currentRoster = tb.finalistRosters[String(seat)] ?? [];
+  if (currentRoster.length >= 3) return false;
   const pick = teamOf(room, seat).find((p) => p.name === playerName);
   if (!pick) return false;
-  const newTb: TiebreakerState = { ...tb, avatars: { ...tb.avatars, [seat]: pick } };
-  const phase: GameRoom["phase"] = newTb.players.every((s) => newTb.avatars[s]) ? "tiebreaker" : "tiebreaker_pick";
+  if (currentRoster.some((p) => p.name === playerName)) return false;
+
+  const newRoster = [...currentRoster, pick];
+  const newFR = { ...tb.finalistRosters, [String(seat)]: newRoster };
+  const allReady = tb.players.every((s) => (newFR[String(s)]?.length ?? 0) >= 3);
+
+  let newBallHolder = { ...tb.ballHolder };
+  if (allReady) {
+    for (const s of tb.players) {
+      if (!newBallHolder[String(s)]) {
+        newBallHolder[String(s)] = newFR[String(s)]?.[0]?.name ?? null;
+      }
+    }
+  }
+
+  const newTb: TiebreakerState = {
+    ...tb,
+    finalistRosters: newFR,
+    ballHolder: newBallHolder,
+  };
+  const phase: GameRoom["phase"] = allReady ? "tiebreaker" : "tiebreaker_pick";
   commit({ ...room, tiebreaker: newTb, phase });
   return true;
 }
 
-export function submitMove(playerId: string, move: string): boolean {
+// ── Finals: submit offense move ───────────────────────────────────────────────
+
+export function submitOffenseMove(playerId: string, playerName: string, shotType: string): boolean {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "tiebreaker" || !room.tiebreaker) return false;
   const tb = room.tiebreaker;
   let seat = seatOf(room, playerId);
   if (!seat || !tb.players.includes(seat)) {
-    const bot = tb.players.find((s) => isBotSeat(room, s) && !tb.moves[String(s)]);
+    const bot = tb.players.find((s) => isBotSeat(room, s) && s === tb.offense && !tb.offenseMove);
     if (bot) seat = bot; else return false;
   }
-  const off = ["drive", "shoot", "fade"];
-  const def = ["paint", "perimeter"];
-  const iAmOff = tb.offense === seat;
-  if (iAmOff && !off.includes(move)) return false;
-  if (!iAmOff && !def.includes(move)) return false;
-  const newTb: TiebreakerState = { ...tb, moves: { ...tb.moves, [seat]: move } };
-  let phase: GameRoom["phase"] = "tiebreaker";
-  let winner: Seat | null = null;
-  if (newTb.players.every((s) => newTb.moves[s])) {
-    const offMove = newTb.moves[tb.offense] as OffenseMove;
-    const defSeat = newTb.players.find((s) => s !== tb.offense)!;
-    const defMove = newTb.moves[defSeat] as DefenseMove;
-    const side = resolveRound(offMove, defMove) === "offense" ? tb.offense : defSeat;
-    newTb.scores = { ...newTb.scores, [side]: newTb.scores[side] + 1 };
-    newTb.history = [...newTb.history, {
-      round: newTb.round, offense: tb.offense,
-      moves: { ...newTb.moves } as Record<string, string>,
-      roundWinner: side,
-    }];
-    if (newTb.scores[side] >= 3) { winner = side; phase = "result"; }
-    else {
-      newTb.round += 1;
-      newTb.offense = defSeat;
-      newTb.moves = { [newTb.players[0]]: null, [newTb.players[1]]: null };
-    }
+  if (seat !== tb.offense) return false;
+  if (tb.offenseMove) return false;
+  const roster = tb.finalistRosters[String(seat)] ?? [];
+  if (!roster.some((p) => p.name === playerName)) return false;
+
+  const offenseMove: FinalsOffenseMove = { playerName, shotType };
+  const newTb: TiebreakerState = { ...tb, offenseMove };
+  return resolveIfBothMoved(room, newTb);
+}
+
+// ── Finals: submit defense move ───────────────────────────────────────────────
+
+export function submitDefenseMove(playerId: string, guardedPlayer: string, defenseType: string): boolean {
+  const room = useP2PStore.getState().room;
+  if (!room || room.phase !== "tiebreaker" || !room.tiebreaker) return false;
+  const tb = room.tiebreaker;
+  const defenseSeat = tb.players.find((s) => s !== tb.offense)!;
+  let seat = seatOf(room, playerId);
+  if (!seat || !tb.players.includes(seat)) {
+    const bot = tb.players.find((s) => isBotSeat(room, s) && s === defenseSeat && !tb.defenseMove);
+    if (bot) seat = bot; else return false;
   }
+  if (seat !== defenseSeat) return false;
+  if (tb.defenseMove) return false;
+
+  const defenseMove: FinalsDefenseMove = { guardedPlayer, defenseType };
+  const newTb: TiebreakerState = { ...tb, defenseMove };
+  return resolveIfBothMoved(room, newTb);
+}
+
+function resolveIfBothMoved(room: GameRoom, tb: TiebreakerState): boolean {
+  if (!tb.offenseMove || !tb.defenseMove) {
+    commit({ ...room, tiebreaker: tb });
+    return true;
+  }
+
+  const offSeat = tb.offense;
+  const defSeat = tb.players.find((s) => s !== offSeat)!;
+  const offRoster = tb.finalistRosters[String(offSeat)] ?? [];
+  const shooter = offRoster.find((p) => p.name === tb.offenseMove!.playerName);
+
+  const result = resolveFinalsRound(
+    tb.offenseMove.shotType,
+    shooter?.rating ?? 80,
+    tb.defenseMove.guardedPlayer,
+    tb.offenseMove.playerName,
+    tb.defenseMove.defenseType,
+  );
+
+  const roundWinner = result.result === "made" ? offSeat : defSeat;
+  const newScores = {
+    ...tb.scores,
+    [String(roundWinner)]: (tb.scores[String(roundWinner)] ?? 0) + 1,
+  };
+
+  const historyEntry = {
+    round: tb.round,
+    offense: offSeat,
+    offensePlayer: tb.offenseMove.playerName,
+    shotType: tb.offenseMove.shotType,
+    guardedPlayer: tb.defenseMove.guardedPlayer,
+    defenseType: tb.defenseMove.defenseType,
+    outcome: result.outcome,
+    result: result.result,
+    roundWinner,
+  };
+
+  const FIRST_TO = 5;
+  let winner: Seat | null = null;
+  let phase: GameRoom["phase"] = "tiebreaker";
+
+  if ((newScores[String(roundWinner)] ?? 0) >= FIRST_TO) {
+    winner = roundWinner;
+    phase = "result";
+  }
+
+  const newBallHolder = {
+    ...tb.ballHolder,
+    [String(offSeat)]: tb.offenseMove.playerName,
+  };
+
+  const newTb: TiebreakerState = {
+    ...tb,
+    offenseMove: null,
+    defenseMove: null,
+    scores: newScores,
+    round: tb.round + 1,
+    offense: defSeat,
+    ballHolder: newBallHolder,
+    history: [...tb.history, historyEntry],
+  };
+
   commit({ ...room, tiebreaker: newTb, phase, winner });
   return true;
 }
 
-// Re-exports for callers
 export { ALL_SEATS };
