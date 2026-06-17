@@ -92,53 +92,84 @@ export const roomManager = {
   },
 
   async joinExistingRoom(code: string, playerId: string, playerName: string): Promise<void> {
-    await peerManager.initJoiner();
-    gameSync.init();
-    await peerManager.connectToHost(code);
+    const MAX_ATTEMPTS = 3;
+    let lastErr: Error = new Error("Could not connect to room");
 
-    // Brief pause so the DataChannel fully stabilizes before sending anything.
-    await new Promise((r) => setTimeout(r, 300));
-    gameSync.requestSync();
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        // Each attempt gets a fresh peer + fresh handlers (destroy clears listeners).
+        await peerManager.initJoiner();
+        gameSync.init();
+        await peerManager.connectToHost(code);
 
-    let room: GameRoom | null = null;
-    // Poll for up to 20 seconds (40 × 500ms). On relay (TURN) connections or
-    // slow networks the host's sync-room message can take several seconds.
-    for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      room = useP2PStore.getState().room;
-      if (room) break;
-      // Re-request sync every 2.5 seconds in case a message was dropped.
-      if (i > 0 && i % 5 === 0) gameSync.requestSync();
+        // Brief stabilisation pause, then fire both hello (explicit handshake)
+        // and request-sync so the host has two separate prompts to reply.
+        await new Promise((r) => setTimeout(r, 300));
+        peerManager.broadcast("hello", null);
+        gameSync.requestSync();
+
+        let room: GameRoom | null = null;
+        // Poll up to 12 s per attempt (24 × 500 ms). Three attempts = 36 s total max.
+        for (let i = 0; i < 24; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          room = useP2PStore.getState().room;
+          if (room) break;
+          // Re-ping the host every 2 s to cover dropped messages.
+          if (i > 0 && i % 4 === 0) {
+            peerManager.broadcast("hello", null);
+            gameSync.requestSync();
+          }
+        }
+
+        if (!room) throw new Error("Host did not respond — room may not exist");
+
+        const alreadyInRoom = room.players.some((p) => p.id === playerId);
+
+        if (alreadyInRoom) {
+          // Player refreshed mid-game — restore local state from host.
+          useP2PStore.setState({ room });
+          return;
+        }
+
+        // Brand-new joiner: block entry if game is already in progress.
+        if (room.phase !== "lobby") {
+          throw new Error("Game already started — you can't join a game in progress");
+        }
+
+        const used = new Set(room.players.map((p) => p.seat));
+        let seat: Seat | null = null;
+        for (const s of ALL_SEATS) {
+          if (!used.has(s) && s <= room.maxPlayers) { seat = s; break; }
+        }
+        if (!seat) throw new Error("Room is full");
+        const updated: GameRoom = {
+          ...room,
+          players: [...room.players, { id: playerId, name: playerName, seat }],
+          updatedAt: new Date().toISOString(),
+        };
+        gameSync.syncRoom(updated);
+        return; // success
+
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+
+        // Don't retry for definitive, non-connection errors.
+        if (
+          lastErr.message.includes("already started") ||
+          lastErr.message.includes("Room is full")
+        ) {
+          throw lastErr;
+        }
+
+        if (attempt < MAX_ATTEMPTS) {
+          // Short pause before retrying so the PeerJS signalling server
+          // has a moment to clear any stale state from the previous attempt.
+          await new Promise((r) => setTimeout(r, 2_000));
+        }
+      }
     }
 
-    if (!room) throw new Error("Host did not respond — room may not exist");
-
-    const alreadyInRoom = room.players.some((p) => p.id === playerId);
-
-    if (alreadyInRoom) {
-      // Player refreshed mid-game — just restore local state from what the host sent.
-      // No need to broadcast; the host already has them in the roster.
-      useP2PStore.setState({ room });
-      return;
-    }
-
-    // Brand-new joiner: block entry if game is already in progress.
-    if (room.phase !== "lobby") {
-      throw new Error("Game already started — you can't join a game in progress");
-    }
-
-    const used = new Set(room.players.map((p) => p.seat));
-    let seat: Seat | null = null;
-    for (const s of ALL_SEATS) {
-      if (!used.has(s) && s <= room.maxPlayers) { seat = s; break; }
-    }
-    if (!seat) throw new Error("Room is full");
-    const updated: GameRoom = {
-      ...room,
-      players: [...room.players, { id: playerId, name: playerName, seat }],
-      updatedAt: new Date().toISOString(),
-    };
-    gameSync.syncRoom(updated);
+    throw lastErr;
   },
 
   async hostSoloRoom(hostId: string, hostName: string, bots: number, respinsTotal = 0, gameMode: GameMode = "classic"): Promise<GameRoom> {
