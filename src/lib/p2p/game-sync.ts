@@ -23,6 +23,13 @@ class GameSync {
       const room = useP2PStore.getState().room;
       if (room && peerManager.isHost) peerManager.sendTo(senderId, "sync-room", room);
     });
+    // "hello" is an explicit handshake from joiners — host replies immediately
+    // with full room state. More reliable than relying on timing alone.
+    peerManager.on("hello", (_data, senderId) => {
+      if (!peerManager.isHost) return;
+      const room = useP2PStore.getState().room;
+      if (room) peerManager.sendTo(senderId, "sync-room", room);
+    });
     peerManager.on("chat", (data) => {
       useP2PStore.getState().addMessage(data as ChatMessage);
     });
