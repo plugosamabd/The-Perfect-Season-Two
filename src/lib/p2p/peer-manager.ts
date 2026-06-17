@@ -170,6 +170,10 @@ class PeerManager {
     }
     this.selfId = "";
     this.isHost = false;
+    // Clear all listeners so repeated init() calls don't accumulate handlers.
+    this.handlers.clear();
+    this.connStateListeners.clear();
+    this.newPeerListeners.clear();
   }
 }
 
