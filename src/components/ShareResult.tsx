@@ -42,8 +42,8 @@ function buildShareText(room: GameRoom, winnerSeat: Seat | 0): string {
       tbLines.push(`  ${seatName(sA)} ${tb.scores[String(sA)] ?? 0} – ${tb.scores[String(sB)] ?? 0} ${seatName(sB)}`);
       tb.history.forEach((h) => {
         const defSeat = finalists.find((s) => s !== h.offense) as Seat;
-        const offMove = h.moves[String(h.offense)] ?? "?";
-        const defMove = h.moves[String(defSeat)] ?? "?";
+        const offMove = `${h.offensePlayer} ${h.shotType}`;
+        const defMove = `${h.guardedPlayer} ${h.defenseType}`;
         const scorerName = seatName(h.roundWinner as Seat);
         tbLines.push(`  R${h.round}: ${seatName(h.offense as Seat)} ${offMove} vs ${seatName(defSeat)} ${defMove} → ${scorerName} scores`);
       });
