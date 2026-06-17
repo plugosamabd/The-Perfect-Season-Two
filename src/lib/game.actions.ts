@@ -22,7 +22,7 @@ import {
   type Seat,
   type SpinResult,
 } from "@/lib/game";
-import { useP2PStore, gameSync, type GameRoom, type TiebreakerState } from "@/lib/p2p";
+import { useP2PStore, gameSync, type GameRoom, type TiebreakerState, type FinalsOffenseMove, type FinalsDefenseMove } from "@/lib/p2p";
 
 function nowIso() { return new Date().toISOString(); }
 function seatOf(room: GameRoom, playerId: string): Seat | null {
@@ -322,8 +322,10 @@ export function runSim() {
 function makeFreshTiebreaker(players: Seat[]): TiebreakerState {
   return {
     players,
-    avatars: { [String(players[0])]: null, [String(players[1])]: null },
-    moves: { [String(players[0])]: null, [String(players[1])]: null },
+    finalistRosters: { [String(players[0])]: [], [String(players[1])]: [] },
+    ballHolder: { [String(players[0])]: null, [String(players[1])]: null },
+    offenseMove: null,
+    defenseMove: null,
     scores: { [String(players[0])]: 0, [String(players[1])]: 0 },
     round: 1,
     offense: players[0],
@@ -331,71 +333,107 @@ function makeFreshTiebreaker(players: Seat[]): TiebreakerState {
   };
 }
 
-// ── Finals: pick avatar (1 isolation player per finalist) ────────────────────
+// ── Finals: pick 3 players per finalist ──────────────────────────────────────
 
-export function pickAvatar(playerId: string, playerName: string): boolean {
+export function pickFinalistPlayer(playerId: string, playerName: string): boolean {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "tiebreaker_pick" || !room.tiebreaker) return false;
   const tb = room.tiebreaker;
   let seat = seatOf(room, playerId);
   if (!seat || !tb.players.includes(seat)) {
-    const bot = tb.players.find((s) => isBotSeat(room, s) && !tb.avatars[String(s)]);
+    const bot = tb.players.find((s) => isBotSeat(room, s) && (tb.finalistRosters[String(s)]?.length ?? 0) < 3);
     if (bot) seat = bot; else return false;
   }
-  if (tb.avatars[String(seat)]) return false;
+  const currentRoster = tb.finalistRosters[String(seat)] ?? [];
+  if (currentRoster.length >= 3) return false;
   const pick = teamOf(room, seat).find((p) => p.name === playerName);
   if (!pick) return false;
+  if (currentRoster.some((p) => p.name === playerName)) return false;
 
-  const newAvatars = { ...tb.avatars, [String(seat)]: pick };
-  const allReady = tb.players.every((s) => !!newAvatars[String(s)]);
-  const newTb: TiebreakerState = { ...tb, avatars: newAvatars };
+  const newRoster = [...currentRoster, pick];
+  const newFR = { ...tb.finalistRosters, [String(seat)]: newRoster };
+  const allReady = tb.players.every((s) => (newFR[String(s)]?.length ?? 0) >= 3);
+
+  const newBallHolder = { ...tb.ballHolder };
+  if (allReady) {
+    for (const s of tb.players) {
+      if (!newBallHolder[String(s)]) {
+        newBallHolder[String(s)] = newFR[String(s)]?.[0]?.name ?? null;
+      }
+    }
+  }
+
+  const newTb: TiebreakerState = {
+    ...tb,
+    finalistRosters: newFR,
+    ballHolder: newBallHolder,
+  };
   const phase: GameRoom["phase"] = allReady ? "tiebreaker" : "tiebreaker_pick";
   commit({ ...room, tiebreaker: newTb, phase });
   return true;
 }
 
-// ── Finals: submit a move (offense or defense based on current seat) ─────────
+// ── Finals: submit offense move ───────────────────────────────────────────────
 
-const OFFENSE_MOVES = new Set(["drive", "shoot", "fade"]);
-const DEFENSE_MOVES = new Set(["paint", "perimeter"]);
-const OFFENSE_SHOT: Record<string, string> = { drive: "Drive", shoot: "Mid-Range", fade: "Three" };
-const DEFENSE_TYPE: Record<string, string> = { paint: "Defend Drive", perimeter: "Defend Three" };
+export function submitOffenseMove(playerId: string, playerName: string, shotType: string): boolean {
+  const room = useP2PStore.getState().room;
+  if (!room || room.phase !== "tiebreaker" || !room.tiebreaker) return false;
+  const tb = room.tiebreaker;
+  let seat = seatOf(room, playerId);
+  if (!seat || !tb.players.includes(seat)) {
+    const bot = tb.players.find((s) => isBotSeat(room, s) && s === tb.offense && !tb.offenseMove);
+    if (bot) seat = bot; else return false;
+  }
+  if (seat !== tb.offense) return false;
+  if (tb.offenseMove) return false;
+  const roster = tb.finalistRosters[String(seat)] ?? [];
+  if (!roster.some((p) => p.name === playerName)) return false;
 
-export function submitMove(playerId: string, move: string): boolean {
+  const offenseMove: FinalsOffenseMove = { playerName, shotType };
+  const newTb: TiebreakerState = { ...tb, offenseMove };
+  return resolveIfBothMoved(room, newTb);
+}
+
+// ── Finals: submit defense move ───────────────────────────────────────────────
+
+export function submitDefenseMove(playerId: string, guardedPlayer: string, defenseType: string): boolean {
   const room = useP2PStore.getState().room;
   if (!room || room.phase !== "tiebreaker" || !room.tiebreaker) return false;
   const tb = room.tiebreaker;
   const defenseSeat = tb.players.find((s) => s !== tb.offense)!;
   let seat = seatOf(room, playerId);
   if (!seat || !tb.players.includes(seat)) {
-    const bot = tb.players.find((s) => isBotSeat(room, s) && !tb.moves[String(s)]);
+    const bot = tb.players.find((s) => isBotSeat(room, s) && s === defenseSeat && !tb.defenseMove);
     if (bot) seat = bot; else return false;
   }
-  if (tb.moves[String(seat)]) return false;
-  const isOffense = seat === tb.offense;
-  if (isOffense && !OFFENSE_MOVES.has(move)) return false;
-  if (!isOffense && !DEFENSE_MOVES.has(move)) return false;
+  if (seat !== defenseSeat) return false;
+  if (tb.defenseMove) return false;
 
-  const newMoves = { ...tb.moves, [String(seat)]: move };
-  const bothIn = tb.players.every((s) => !!newMoves[String(s)]);
-  if (!bothIn) {
-    commit({ ...room, tiebreaker: { ...tb, moves: newMoves } });
+  const defenseMove: FinalsDefenseMove = { guardedPlayer, defenseType };
+  const newTb: TiebreakerState = { ...tb, defenseMove };
+  return resolveIfBothMoved(room, newTb);
+}
+
+function resolveIfBothMoved(room: GameRoom, tb: TiebreakerState): boolean {
+  if (!tb.offenseMove || !tb.defenseMove) {
+    commit({ ...room, tiebreaker: tb });
     return true;
   }
 
   const offSeat = tb.offense;
-  const offMove = newMoves[String(offSeat)] as string;
-  const defMove = newMoves[String(defenseSeat)] as string;
-  const shooter = tb.avatars[String(offSeat)];
+  const defSeat = tb.players.find((s) => s !== offSeat)!;
+  const offRoster = tb.finalistRosters[String(offSeat)] ?? [];
+  const shooter = offRoster.find((p) => p.name === tb.offenseMove!.playerName);
+
   const result = resolveFinalsRound(
-    OFFENSE_SHOT[offMove] ?? "Mid-Range",
+    tb.offenseMove.shotType,
     shooter?.rating ?? 80,
-    shooter?.name ?? "",
-    shooter?.name ?? "",
-    DEFENSE_TYPE[defMove] ?? "Defend Mid",
+    tb.defenseMove.guardedPlayer,
+    tb.offenseMove.playerName,
+    tb.defenseMove.defenseType,
   );
 
-  const roundWinner = result.result === "made" ? offSeat : defenseSeat;
+  const roundWinner = result.result === "made" ? offSeat : defSeat;
   const newScores = {
     ...tb.scores,
     [String(roundWinner)]: (tb.scores[String(roundWinner)] ?? 0) + 1,
@@ -404,11 +442,16 @@ export function submitMove(playerId: string, move: string): boolean {
   const historyEntry = {
     round: tb.round,
     offense: offSeat,
-    moves: { [String(offSeat)]: offMove, [String(defenseSeat)]: defMove },
+    offensePlayer: tb.offenseMove.playerName,
+    shotType: tb.offenseMove.shotType,
+    guardedPlayer: tb.defenseMove.guardedPlayer,
+    defenseType: tb.defenseMove.defenseType,
+    outcome: result.outcome,
+    result: result.result,
     roundWinner,
   };
 
-  const FIRST_TO = 3;
+  const FIRST_TO = 5;
   let winner: Seat | null = null;
   let phase: GameRoom["phase"] = "tiebreaker";
   if ((newScores[String(roundWinner)] ?? 0) >= FIRST_TO) {
@@ -416,18 +459,26 @@ export function submitMove(playerId: string, move: string): boolean {
     phase = "result";
   }
 
+  const newBallHolder = {
+    ...tb.ballHolder,
+    [String(offSeat)]: tb.offenseMove.playerName,
+  };
+
   const newTb: TiebreakerState = {
     ...tb,
-    moves: { [String(offSeat)]: null, [String(defenseSeat)]: null },
+    offenseMove: null,
+    defenseMove: null,
     scores: newScores,
     round: tb.round + 1,
-    offense: defenseSeat,
+    offense: defSeat,
+    ballHolder: newBallHolder,
     history: [...tb.history, historyEntry],
   };
 
   commit({ ...room, tiebreaker: newTb, phase, winner });
   return true;
 }
+
 
 
 export { ALL_SEATS };
