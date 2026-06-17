@@ -164,23 +164,48 @@ function RoomPage() {
 /* ---------------- JOIN FROM LINK ---------------- */
 
 function JoinFromLink({ code }: { code: string }) {
-  const [name, setName] = useState(() => getPlayerName());
-  const [busy, setBusy] = useState(false);
+  const savedName = getPlayerName();
+  const [name, setName] = useState(savedName);
+  // If the player already has a saved name, auto-attempt reconnect immediately.
+  const [busy, setBusy] = useState(!!savedName);
   const [err, setErr] = useState<string | null>(null);
 
-  async function join(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) { setErr("Enter your name"); return; }
-    setPlayerName(name.trim());
+  async function attemptJoin(joinName: string) {
+    if (!joinName.trim()) { setErr("Enter your name"); setBusy(false); return; }
+    setPlayerName(joinName.trim());
     setBusy(true);
     setErr(null);
     try {
       const pid = getPlayerId();
-      await roomManager.joinExistingRoom(code, pid, name.trim());
+      await roomManager.joinExistingRoom(code, pid, joinName.trim());
+      // On success the Zustand store updates → RoomPage re-renders with the game.
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : "Could not connect to room");
       setBusy(false);
     }
+  }
+
+  // Auto-reconnect on mount if we already know this player's name.
+  useEffect(() => {
+    if (savedName) attemptJoin(savedName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function join(e: React.FormEvent) {
+    e.preventDefault();
+    await attemptJoin(name);
+  }
+
+  // While auto-reconnecting, show a clean loading screen instead of the form.
+  if (busy && !err) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="text-center space-y-3">
+          <div className="font-mono text-4xl tracking-[0.3em] text-foreground">{code}</div>
+          <div className="text-sm text-muted-foreground animate-pulse">Reconnecting to room…</div>
+        </div>
+      </div>
+    );
   }
 
   return (
