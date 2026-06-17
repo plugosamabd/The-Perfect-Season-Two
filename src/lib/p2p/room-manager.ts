@@ -95,37 +95,50 @@ export const roomManager = {
     await peerManager.initJoiner();
     gameSync.init();
     await peerManager.connectToHost(code);
+
+    // Brief pause so the DataChannel fully stabilizes before sending anything.
+    await new Promise((r) => setTimeout(r, 300));
     gameSync.requestSync();
 
     let room: GameRoom | null = null;
-    for (let i = 0; i < 24; i++) {
-      await new Promise((r) => setTimeout(r, 250));
+    // Poll for up to 20 seconds (40 × 500ms). On relay (TURN) connections or
+    // slow networks the host's sync-room message can take several seconds.
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
       room = useP2PStore.getState().room;
       if (room) break;
-      if (i > 0 && i % 4 === 0) gameSync.requestSync();
+      // Re-request sync every 2.5 seconds in case a message was dropped.
+      if (i > 0 && i % 5 === 0) gameSync.requestSync();
     }
 
     if (!room) throw new Error("Host did not respond — room may not exist");
 
-    // Game already in progress — can't join mid-game
+    const alreadyInRoom = room.players.some((p) => p.id === playerId);
+
+    if (alreadyInRoom) {
+      // Player refreshed mid-game — just restore local state from what the host sent.
+      // No need to broadcast; the host already has them in the roster.
+      useP2PStore.setState({ room });
+      return;
+    }
+
+    // Brand-new joiner: block entry if game is already in progress.
     if (room.phase !== "lobby") {
       throw new Error("Game already started — you can't join a game in progress");
     }
 
-    if (!room.players.some((p) => p.id === playerId)) {
-      const used = new Set(room.players.map((p) => p.seat));
-      let seat: Seat | null = null;
-      for (const s of ALL_SEATS) {
-        if (!used.has(s) && s <= room.maxPlayers) { seat = s; break; }
-      }
-      if (!seat) throw new Error("Room is full");
-      const updated: GameRoom = {
-        ...room,
-        players: [...room.players, { id: playerId, name: playerName, seat }],
-        updatedAt: new Date().toISOString(),
-      };
-      gameSync.syncRoom(updated);
+    const used = new Set(room.players.map((p) => p.seat));
+    let seat: Seat | null = null;
+    for (const s of ALL_SEATS) {
+      if (!used.has(s) && s <= room.maxPlayers) { seat = s; break; }
     }
+    if (!seat) throw new Error("Room is full");
+    const updated: GameRoom = {
+      ...room,
+      players: [...room.players, { id: playerId, name: playerName, seat }],
+      updatedAt: new Date().toISOString(),
+    };
+    gameSync.syncRoom(updated);
   },
 
   async hostSoloRoom(hostId: string, hostName: string, bots: number, respinsTotal = 0, gameMode: GameMode = "classic"): Promise<GameRoom> {
@@ -199,6 +212,16 @@ export const roomManager = {
       updatedAt: new Date().toISOString(),
     };
     gameSync.syncRoom(updated);
+    // Re-broadcast at 1s and 3s so joiners whose connection wobbled right as
+    // the draft started still receive the phase change.
+    setTimeout(() => {
+      const cur = useP2PStore.getState().room;
+      if (cur && cur.phase === "draft") gameSync.syncRoom(cur);
+    }, 1_000);
+    setTimeout(() => {
+      const cur = useP2PStore.getState().room;
+      if (cur && cur.phase === "draft") gameSync.syncRoom(cur);
+    }, 3_000);
   },
 
   addBot(hostId: string) {
