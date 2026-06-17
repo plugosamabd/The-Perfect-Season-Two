@@ -72,7 +72,7 @@ class PeerManager {
     const target = hostPeerId(roomCode);
     return new Promise((resolve, reject) => {
       const conn = this.peer!.connect(target, { reliable: true });
-      const timer = setTimeout(() => reject(new Error("Host did not respond")), 12_000);
+      const timer = setTimeout(() => reject(new Error("Host did not respond")), 20_000);
       conn.on("open", () => {
         clearTimeout(timer);
         this.wireConnection(conn);
