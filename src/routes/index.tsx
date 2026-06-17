@@ -30,6 +30,7 @@ function Landing() {
   const [respins, setRespins] = useState(0);
   const [gameMode, setGameMode] = useState<GameMode>("classic");
   const [busy, setBusy] = useState(false);
+  const [connectStatus, setConnectStatus] = useState("Connecting…");
   const [err, setErr] = useState<string | null>(null);
   const [resumeCode, setResumeCode] = useState<string | null>(null);
 
@@ -56,7 +57,8 @@ function Landing() {
       } else {
         const c = code.trim().toUpperCase();
         if (!c) { setErr("Enter room code"); setBusy(false); return; }
-        await roomManager.joinExistingRoom(c, pid, name.trim());
+        setConnectStatus("Connecting…");
+        await roomManager.joinExistingRoom(c, pid, name.trim(), setConnectStatus);
         navigate({ to: "/room/$code", params: { code: c } });
       }
     } catch (e) {
@@ -263,7 +265,7 @@ function Landing() {
               disabled={busy}
               className="w-full py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase hover:opacity-90 disabled:opacity-40 transition"
             >
-              {busy ? "Connecting…" : mode === "solo" ? "Start solo" : mode === "create" ? "Host room" : "Join room"}
+              {busy && mode === "join" ? connectStatus : busy ? "Connecting…" : mode === "solo" ? "Start solo" : mode === "create" ? "Host room" : "Join room"}
             </button>
           </form>
         </div>
