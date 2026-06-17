@@ -12,11 +12,9 @@ export type DraftedPlayer = Player & { slot: Position };
 
 export interface SpinResult {
   ts: number;
-  // Team phase
   team: string;
   teamIndex: number;
   teamRotation: number;
-  // Era phase — null until era wheel has been spun
   era: Era | null;
   eraIndex: number | null;
   eraRotation: number | null;
@@ -40,19 +38,151 @@ export function simSeason(team: Player[]): Record82 {
   return { wins, losses: 82 - wins };
 }
 
-export type OffenseMove = "drive" | "shoot" | "fade";
-export type DefenseMove = "paint" | "perimeter";
+// ── Finals: player-specific shot types ──────────────────────────────────────
 
-export function resolveRound(off: OffenseMove, def: DefenseMove): "offense" | "defense" {
-  if (off === "drive") return def === "paint" ? "defense" : "offense";
-  if (off === "shoot") return def === "perimeter" ? "defense" : "offense";
-  if (def === "paint") return "offense";
-  return Math.random() < 0.5 ? "offense" : "defense";
+export const PLAYER_SHOTS: Record<string, string[]> = {
+  "Michael Jordan":          ["Fadeaway", "Drive", "Pull-Up"],
+  "Stephen Curry":           ["Deep Three", "Relocation Three", "Drive"],
+  "Shaquille O'Neal":        ["Drop Step", "Power Drive", "Hook Shot"],
+  "Kyrie Irving":            ["Jelly Layup", "Stepback", "Drive"],
+  "LeBron James":            ["Drive", "Fade", "Three"],
+  "Kobe Bryant":             ["Fadeaway", "Mid-Range", "Drive"],
+  "Kevin Durant":            ["Fade", "Three", "Drive"],
+  "Dirk Nowitzki":           ["Fadeaway", "Three", "Pull-Up"],
+  "Hakeem Olajuwon":         ["Drop Step", "Fade", "Hook Shot"],
+  "Tim Duncan":              ["Post Move", "Mid-Range", "Hook Shot"],
+  "Allen Iverson":           ["Drive", "Pull-Up", "Stepback"],
+  "James Harden":            ["Stepback Three", "Drive", "Pull-Up"],
+  "Nikola Jokic":            ["Post Move", "Drive", "Fade"],
+  "Giannis Antetokounmpo":   ["Drive", "Power Drive", "Mid-Range"],
+  "Luka Doncic":             ["Stepback Three", "Drive", "Fade"],
+  "Ja Morant":               ["Drive", "Jelly Layup", "Pull-Up"],
+  "Anthony Edwards":         ["Drive", "Three", "Pull-Up"],
+  "Damian Lillard":          ["Deep Three", "Pull-Up", "Drive"],
+  "Shai Gilgeous-Alexander": ["Drive", "Mid-Range", "Stepback"],
+  "Kareem Abdul-Jabbar":     ["Skyhook", "Hook Shot", "Post Move"],
+  "Wilt Chamberlain":        ["Drop Step", "Power Drive", "Fade"],
+  "Bill Russell":            ["Drop Step", "Post Move", "Hook Shot"],
+  "Magic Johnson":           ["Drive", "Pull-Up", "Post Move"],
+  "Larry Bird":              ["Three", "Mid-Range", "Fade"],
+  "Julius Erving":           ["Drive", "Fade", "Jelly Layup"],
+  "Oscar Robertson":         ["Pull-Up", "Mid-Range", "Drive"],
+  "Charles Barkley":         ["Post Move", "Drive", "Mid-Range"],
+  "Patrick Ewing":           ["Post Move", "Mid-Range", "Drop Step"],
+  "Karl Malone":             ["Post Move", "Mid-Range", "Drive"],
+  "Jerry West":              ["Pull-Up", "Mid-Range", "Drive"],
+  "Dwyane Wade":             ["Drive", "Jelly Layup", "Mid-Range"],
+  "Chris Paul":              ["Pull-Up", "Mid-Range", "Drive"],
+  "Tracy McGrady":           ["Mid-Range", "Drive", "Three"],
+  "Vince Carter":            ["Dunk", "Three", "Drive"],
+  "Paul Pierce":             ["Mid-Range", "Fade", "Three"],
+  "Kawhi Leonard":           ["Mid-Range", "Drive", "Three"],
+  "Russell Westbrook":       ["Drive", "Pull-Up", "Dunk"],
+  "Kevin Garnett":           ["Mid-Range", "Post Move", "Fade"],
+  "Elgin Baylor":            ["Drive", "Mid-Range", "Fade"],
+  "Rick Barry":              ["Mid-Range", "Three", "Drive"],
+  "Walt Frazier":            ["Pull-Up", "Drive", "Mid-Range"],
+  "Pete Maravich":           ["Pull-Up", "Mid-Range", "Drive"],
+  "Isiah Thomas":            ["Drive", "Pull-Up", "Mid-Range"],
+  "Clyde Drexler":           ["Drive", "Dunk", "Mid-Range"],
+  "Zion Williamson":         ["Power Drive", "Dunk", "Mid-Range"],
+  "Devin Booker":            ["Mid-Range", "Three", "Drive"],
+  "Jayson Tatum":            ["Fade", "Three", "Drive"],
+};
+
+export const POSITION_SHOTS: Record<string, string[]> = {
+  "PG": ["Drive", "Pull-Up", "Three"],
+  "SG": ["Three", "Mid-Range", "Drive"],
+  "SF": ["Fade", "Drive", "Mid-Range"],
+  "PF": ["Post Move", "Mid-Range", "Drive"],
+  "C":  ["Drop Step", "Hook Shot", "Post Move"],
+};
+
+export const SHOT_ZONES: Record<string, "three" | "mid" | "drive" | "post"> = {
+  "Deep Three":        "three",
+  "Relocation Three":  "three",
+  "Three":             "three",
+  "Stepback Three":    "three",
+  "Mid-Range":         "mid",
+  "Pull-Up":           "mid",
+  "Fadeaway":          "mid",
+  "Fade":              "mid",
+  "Stepback":          "mid",
+  "Skyhook":           "mid",
+  "Drive":             "drive",
+  "Jelly Layup":       "drive",
+  "Power Drive":       "drive",
+  "Dunk":              "drive",
+  "Drop Step":         "post",
+  "Hook Shot":         "post",
+  "Post Move":         "post",
+};
+
+export const DEFENSE_TYPES = ["Defend Drive", "Defend Mid", "Defend Three", "Defend Post"] as const;
+export type DefenseType = (typeof DEFENSE_TYPES)[number];
+
+export const DEFENSE_ZONES: Record<string, "three" | "mid" | "drive" | "post"> = {
+  "Defend Drive": "drive",
+  "Defend Mid":   "mid",
+  "Defend Three": "three",
+  "Defend Post":  "post",
+};
+
+export function getShotsForPlayer(playerName: string, position: string): string[] {
+  return PLAYER_SHOTS[playerName] ?? POSITION_SHOTS[position] ?? ["Drive", "Mid-Range", "Three"];
 }
 
-// ── Sim engine: weighted offense / defense ──────────────────────────────────
+export interface FinalsRoundResult {
+  result: "made" | "missed";
+  outcome: "open" | "contested" | "blocked";
+  makeChance: number;
+}
 
-// Players known for elite defensive impact (bonus on top of their base rating).
+export function resolveFinalsRound(
+  shotType: string,
+  playerRating: number,
+  guardedPlayer: string,
+  shootingPlayer: string,
+  defenseType: string,
+): FinalsRoundResult {
+  const shotZone  = SHOT_ZONES[shotType]   ?? "mid";
+  const defZone   = DEFENSE_ZONES[defenseType] ?? "mid";
+  const rightPlayer = guardedPlayer === shootingPlayer;
+  const exactRead   = rightPlayer && shotZone === defZone;
+  const nearRead    = rightPlayer && !exactRead;
+  const zoneOnly    = !rightPlayer && shotZone === defZone;
+
+  const baseMake: Record<string, number> = {
+    three: 0.35,
+    mid:   0.45,
+    drive: 0.55,
+    post:  0.50,
+  };
+
+  const ratingBonus = (playerRating - 87.5) / 150;
+  let makeChance = (baseMake[shotZone] ?? 0.45) + ratingBonus;
+  let outcome: "open" | "contested" | "blocked";
+
+  if (exactRead) {
+    makeChance = 0.08;
+    outcome = "blocked";
+  } else if (nearRead) {
+    makeChance = Math.max(0.20, makeChance - 0.20);
+    outcome = "contested";
+  } else if (zoneOnly) {
+    makeChance = Math.max(0.30, makeChance - 0.10);
+    outcome = "contested";
+  } else {
+    outcome = "open";
+  }
+
+  makeChance = Math.min(0.85, Math.max(0.05, makeChance));
+  const made = Math.random() < makeChance;
+  return { result: made ? "made" : "missed", outcome, makeChance };
+}
+
+// ── Sim engine ───────────────────────────────────────────────────────────────
+
 const DEFENSIVE_ELITE = new Set([
   "Bill Russell", "Wilt Chamberlain", "Nate Thurmond", "Willis Reed",
   "Dennis Rodman", "Scottie Pippen", "Gary Payton", "Ben Wallace",
@@ -64,7 +194,6 @@ const DEFENSIVE_ELITE = new Set([
   "Walt Frazier", "Dave DeBusschere", "Gus Johnson",
 ]);
 
-// Players known for elite offensive production beyond their base rating.
 const OFFENSIVE_ELITE = new Set([
   "Michael Jordan", "LeBron James", "Kobe Bryant", "Stephen Curry",
   "Kevin Durant", "Shaquille O'Neal", "Magic Johnson", "Larry Bird",
@@ -96,36 +225,23 @@ function playerDefense(p: Player): number {
   return base + eraB + wowB + eliteB;
 }
 
-// How well a set of defenders contests against a set of offensive players.
-// Each offensive player faces the best matchup the defense can throw at them.
-// Returns a multiplier: 1.0 = defense is average, < 1 = strong D, > 1 = weak D.
 function defensiveMultiplier(offense: Player[], defense: Player[]): number {
   if (defense.length === 0) return 1;
   const avgDef = defense.reduce((s, p) => s + playerDefense(p), 0) / defense.length;
-  // Normalised around a league-average defense score of ~46
-  const normalized = (avgDef - 46) / 12; // roughly -1 to +1
-  // Defense is weighted at 55% — great defense meaningfully suppresses offense
+  const normalized = (avgDef - 46) / 12;
   return Math.max(0.65, Math.min(1.20, 1 - normalized * 0.20));
 }
 
-// Head-to-head matchup between two teams. Returns "A" or "B".
 export function simMatchup(teamA: Player[], teamB: Player[]): "A" | "B" {
   if (teamA.length === 0) return "B";
   if (teamB.length === 0) return "A";
-
-  // Raw offensive power of each team
   const offA = teamA.reduce((s, p) => s + playerOffense(p), 0) / teamA.length;
   const offB = teamB.reduce((s, p) => s + playerOffense(p), 0) / teamB.length;
-
-  // Team B's defense suppresses Team A's offense, and vice versa
   const netA = offA * defensiveMultiplier(teamA, teamB);
   const netB = offB * defensiveMultiplier(teamB, teamA);
-
-  // Add a small random noise so upsets are possible
   const noise = (Math.random() - 0.5) * 6;
   const sA = netA + noise;
   const sB = netB;
-
   return Math.random() < sA / (sA + sB) ? "A" : "B";
 }
 
