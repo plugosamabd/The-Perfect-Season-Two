@@ -87,9 +87,18 @@ export const roomManager = {
     gameSync.init();
     await peerManager.connectToHost(code);
     gameSync.requestSync();
-    await new Promise((r) => setTimeout(r, 400));
-    const room = useP2PStore.getState().room;
-    if (room && !room.players.some((p) => p.id === playerId)) {
+
+    // Poll up to 4 seconds for the host to send back the room state.
+    let room: GameRoom | null = null;
+    for (let i = 0; i < 16; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      room = useP2PStore.getState().room;
+      if (room) break;
+    }
+
+    if (!room) throw new Error("Host did not respond — room may not exist");
+
+    if (!room.players.some((p) => p.id === playerId)) {
       const used = new Set(room.players.map((p) => p.seat));
       let seat: Seat | null = null;
       for (const s of ALL_SEATS) {

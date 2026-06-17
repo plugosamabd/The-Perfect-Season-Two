@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getPlayerId, getPlayerName } from "@/lib/identity";
+import { getPlayerId, getPlayerName, setPlayerName } from "@/lib/identity";
 import { ERA_BOOST, erasForTeam, getPlayersFor, teamColor, TEAMS_WITH_ROSTER, type Era, type Player, type Position } from "@/data/roster";
 import { POSITIONS, TURN_SECONDS, type DraftedPlayer, type Seat } from "@/lib/game";
 import { useP2PStore, roomManager, type GameRoom, type TvtMatchup } from "@/lib/p2p";
@@ -102,23 +102,7 @@ function RoomPage() {
         </div>
       );
     }
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <div className="max-w-sm text-center">
-          <div className="font-display text-5xl text-foreground">404</div>
-          <h1 className="mt-3 font-display text-2xl">Room not found</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            P2P rooms live only in the host's browser. Ask the host for a fresh code.
-          </p>
-          <Link
-            to="/"
-            className="mt-6 inline-flex items-center justify-center rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90"
-          >
-            Go home
-          </Link>
-        </div>
-      </div>
-    );
+    return <JoinFromLink code={code} />;
   }
 
   const myRespinsLeft = realSeat > 0
@@ -177,6 +161,65 @@ function RoomPage() {
       </main>
 
       <ChatBox myId={pid} myName={myName} mySeat={realSeat} />
+    </div>
+  );
+}
+
+/* ---------------- JOIN FROM LINK ---------------- */
+
+function JoinFromLink({ code }: { code: string }) {
+  const [name, setName] = useState(() => getPlayerName());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function join(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) { setErr("Enter your name"); return; }
+    setPlayerName(name.trim());
+    setBusy(true);
+    setErr(null);
+    try {
+      const pid = getPlayerId();
+      await roomManager.joinExistingRoom(code, pid, name.trim());
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : "Could not connect to room");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-6">
+          <div className="font-mono text-4xl tracking-[0.3em] text-foreground">{code}</div>
+          <h1 className="mt-2 font-display text-2xl">Join this room</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Enter your name to join.</p>
+        </div>
+        <form onSubmit={join} className="bg-card border border-border rounded-2xl p-5 space-y-4">
+          <div className="space-y-1.5">
+            <label className="block text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Your name</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={20}
+              autoFocus
+              className="w-full bg-background border border-border rounded-md px-3.5 py-2.5 text-sm focus:border-foreground/40 outline-none"
+              placeholder="alex"
+            />
+          </div>
+          {err && <div className="text-destructive text-xs">{err}</div>}
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full py-3 rounded-md bg-foreground text-background text-sm font-medium tracking-wide uppercase hover:opacity-90 disabled:opacity-40 transition"
+          >
+            {busy ? "Connecting…" : "Join room"}
+          </button>
+        </form>
+        <div className="mt-4 text-center">
+          <Link to="/" className="text-xs text-muted-foreground hover:text-foreground transition">← Back home</Link>
+        </div>
+      </div>
     </div>
   );
 }
@@ -634,7 +677,7 @@ function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
     <div className="py-10 max-w-2xl mx-auto">
       <div className="text-center mb-8">
         <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Team vs Team</div>
-        <h2 className="font-display text-3xl sm:text-4xl mt-2">Round-robin results</h2>
+        <h2 className="font-display text-3xl sm:text-4xl mt-2">Results</h2>
       </div>
 
       {/* Matchup cards */}
@@ -691,7 +734,6 @@ function TvtBracket({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
 }
 
 function MiniScoreCard({ seat, name, record, focused, isTvt }: { seat: SeatN; name: string | null; record: { wins: number; losses: number } | null; focused: boolean; isTvt?: boolean }) {
-  const r = record ?? (isTvt ? { wins: 0, losses: 0 } : { wins: 0, losses: 82 });
   return (
     <div className={`bg-card border rounded-xl p-4 ${focused ? "border-foreground/40 ring-1 " + SEAT_RING[seat] : "border-border opacity-90"}`}>
       <div className="flex items-center gap-2">
@@ -699,7 +741,10 @@ function MiniScoreCard({ seat, name, record, focused, isTvt }: { seat: SeatN; na
         <div className="text-sm font-medium truncate">{name}</div>
       </div>
       <div className="font-mono text-3xl sm:text-4xl text-foreground text-center mt-3">
-        {String(r.wins).padStart(2, "0")}-{String(r.losses).padStart(2, "0")}
+        {record
+          ? `${String(record.wins).padStart(2, "0")}-${String(record.losses).padStart(2, "0")}`
+          : <span className="text-base text-muted-foreground animate-pulse">Simulating…</span>
+        }
       </div>
       {isTvt && <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground text-center mt-1">vs teams</div>}
     </div>
@@ -846,10 +891,13 @@ function Result({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
 
   return (
     <div className="py-10 text-center max-w-5xl mx-auto">
-      <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Final</div>
-      <h2 className={`font-display text-4xl sm:text-5xl mt-2 ${youWin ? "text-emerald-300" : "text-foreground"}`}>
-        {tie ? "Tie" : `${winnerName} wins`}
-      </h2>
+      <div className="relative inline-block">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Final</div>
+        <h2 className={`font-display text-4xl sm:text-5xl mt-2 ${youWin ? "text-emerald-300" : "text-foreground"}`}>
+          {tie ? "Tie" : `${winnerName} wins`}
+        </h2>
+        <SimInfoButton />
+      </div>
       <div className={`mt-8 grid ${cols} gap-3`}>
         {seats.map((s) => (
           <FinalCard key={s} seat={s} name={seatName(room, s)} record={seatRecord(room, s)} roster={seatTeam(room, s)} winner={s === winner} />
@@ -862,6 +910,73 @@ function Result({ room, me }: { room: GameRoom; me: SeatN | 0 }) {
       >
         Rematch
       </button>
+    </div>
+  );
+}
+
+function SimInfoButton() {
+  const [showInfo, setShowInfo] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setShowInfo(true)}
+        title="How the sim works"
+        className="absolute -top-1 -right-9 w-7 h-7 rounded-full border border-border bg-card text-muted-foreground hover:text-foreground hover:border-foreground/40 transition flex items-center justify-center text-xs font-bold"
+      >
+        i
+      </button>
+      {showInfo && <SimInfoModal onClose={() => setShowInfo(false)} />}
+    </>
+  );
+}
+
+function SimInfoModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card border border-border rounded-2xl p-6 max-w-md w-full text-left"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between mb-4">
+          <h3 className="font-display text-xl">How the sim decides</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg leading-none ml-4">✕</button>
+        </div>
+        <div className="space-y-3 text-sm text-muted-foreground">
+          <div>
+            <div className="text-foreground font-medium mb-0.5">Player rating (65–99)</div>
+            The foundation of every calculation. Higher rated players contribute more to both offense and defense.
+          </div>
+          <div>
+            <div className="text-foreground font-medium mb-0.5">Defense (weighted 55%)</div>
+            Defense is the dominant factor. Teams with elite defenders — Kawhi, Draymond, Bill Russell, Gary Payton, Dennis Rodman, Ben Wallace — meaningfully suppress the opposing team's offense. A lockdown defense can neutralise higher-rated opponents.
+          </div>
+          <div>
+            <div className="text-foreground font-medium mb-0.5">Offense (weighted 45%)</div>
+            Superstars like LeBron, Jordan, Steph, Shaq, and KD carry an extra offensive bonus on top of their rating. The better your offense, the harder it is for the opposing defense to stop you.
+          </div>
+          <div>
+            <div className="text-foreground font-medium mb-0.5">Shooting vs defenders</div>
+            Every offensive player's scoring is contested by the opposing defense's average defensive rating. Elite shooters on weak-defense teams will be less punished than the same shooter facing a lockdown unit.
+          </div>
+          <div>
+            <div className="text-foreground font-medium mb-0.5">Era boost</div>
+            Older eras receive a small bonus so legends from the 60s–80s remain competitive against modern players with inflated ratings.
+          </div>
+          <div>
+            <div className="text-foreground font-medium mb-0.5">Legendary tier (WOW)</div>
+            All-time greats carry an additional bonus on top of all the above. Stacking multiple legends compounds the advantage.
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="mt-5 w-full py-2 rounded-md bg-foreground text-background text-sm font-medium hover:opacity-90"
+        >
+          Got it
+        </button>
+      </div>
     </div>
   );
 }
@@ -910,51 +1025,7 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
         </button>
       </div>
 
-      {/* ── Info modal ── */}
-      {showInfo && (
-        <div
-          className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setShowInfo(false)}
-        >
-          <div
-            className="bg-card border border-border rounded-2xl p-6 max-w-md w-full text-left"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between mb-4">
-              <h3 className="font-display text-xl">How the sim decides</h3>
-              <button onClick={() => setShowInfo(false)} className="text-muted-foreground hover:text-foreground text-lg leading-none ml-4">✕</button>
-            </div>
-            <div className="space-y-3 text-sm text-muted-foreground">
-              <div>
-                <div className="text-foreground font-medium mb-0.5">Player rating (65–99)</div>
-                The biggest factor. Each team's average rating forms the base of their strength score. Higher rated players win more often.
-              </div>
-              <div>
-                <div className="text-foreground font-medium mb-0.5">Era boost</div>
-                Older eras get a modest bonus to balance against modern players who carry inflated ratings. A 60s legend at 85 competes closer to a 2020s player at 90.
-              </div>
-              <div>
-                <div className="text-foreground font-medium mb-0.5">Legendary tier (WOW)</div>
-                All-time greats carry a bonus on top of their rating — having multiple legends stacks the advantage.
-              </div>
-              <div>
-                <div className="text-foreground font-medium mb-0.5">Head-to-head matchup</div>
-                Each match is probabilistic: the stronger team wins more often, but an upset is always possible. Team strength = avg rating + era bonuses + legend bonuses.
-              </div>
-              <div>
-                <div className="text-foreground font-medium mb-0.5">1-on-1 tiebreaker</div>
-                The top two teams face off in a best-of-5 isolation round. Offense chooses drive / shoot / fade; defense chooses paint or perimeter. Outcomes are a mix of matchup logic and chance.
-              </div>
-            </div>
-            <button
-              onClick={() => setShowInfo(false)}
-              className="mt-5 w-full py-2 rounded-md bg-foreground text-background text-sm font-medium hover:opacity-90"
-            >
-              Got it
-            </button>
-          </div>
-        </div>
-      )}
+      {showInfo && <SimInfoModal onClose={() => setShowInfo(false)} />}
 
       {/* ── Match results ── */}
       {matchups.length > 0 && (
@@ -979,18 +1050,20 @@ function TvtRecap({ room, me, winner, youWin }: { room: GameRoom; me: SeatN | 0;
         </div>
       )}
 
-      {/* ── Both teams' rosters + MVP ── */}
+      {/* ── All teams' rosters + MVP ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-        {finalists.map((s) => {
+        {seats.map((s) => {
           const roster = seatTeam(room, s);
           const mvp = mvpOf(roster);
           const isWinner = s === winner;
+          const isFinalist = finalists.includes(s);
           return (
-            <div key={s} className={`bg-card border rounded-2xl p-4 ${isWinner ? "border-foreground/40 ring-1 " + SEAT_RING[s] : "border-border"}`}>
+            <div key={s} className={`bg-card border rounded-2xl p-4 ${isWinner ? "border-foreground/40 ring-1 " + SEAT_RING[s] : isFinalist ? "border-border" : "border-border opacity-70"}`}>
               <div className="flex items-center gap-2 mb-3">
                 <span className={`w-1.5 h-1.5 rounded-full ${SEAT_DOT[s]}`} />
                 <div className={`text-sm font-semibold truncate ${isWinner ? SEAT_TEXT[s] : ""}`}>{seatName(room, s)}</div>
                 {isWinner && <span className="ml-auto text-xs">🏆</span>}
+                {!isWinner && isFinalist && <span className="ml-auto text-[10px] uppercase tracking-widest text-muted-foreground">Finalist</span>}
               </div>
               {/* MVP */}
               {mvp && (
